@@ -766,29 +766,36 @@ class ${className} {
             // Sort files by path for better organization
             htmlFiles.sort((a, b) => a.path.localeCompare(b.path));
 
-            // Create styled checkboxes for each HTML file
+            // Create themed checkboxes for each HTML file
             htmlFiles.forEach(file => {
                 const label = document.createElement('label');
-                label.style.cssText = 'display: flex; align-items: center; padding: 8px; margin-bottom: 5px; cursor: pointer; border-radius: 4px; transition: background-color 0.2s;';
-
-                label.onmouseenter = () => {
-                    label.style.backgroundColor = '#333';
-                };
-                label.onmouseleave = () => {
-                    label.style.backgroundColor = 'transparent';
-                };
+                label.className = 'theme-checkbox theme-checkbox--list';
 
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
                 checkbox.value = file.path;
-                checkbox.style.cssText = 'margin-right: 10px; cursor: pointer;';
+                checkbox.className = 'theme-checkbox-input';
+
+                const indicator = document.createElement('span');
+                indicator.className = 'theme-checkbox-indicator';
+                indicator.setAttribute('aria-hidden', 'true');
 
                 const text = document.createElement('span');
+                text.className = 'theme-checkbox-text';
                 text.textContent = file.path;
-                text.style.cssText = 'color: #e0e0e0; user-select: none;';
 
                 label.appendChild(checkbox);
+                label.appendChild(indicator);
                 label.appendChild(text);
+
+                checkbox.addEventListener('change', () => {
+                    if (checkbox.checked) {
+                        label.classList.add('theme-checkbox--checked');
+                    } else {
+                        label.classList.remove('theme-checkbox--checked');
+                    }
+                });
+
                 filesList.appendChild(label);
             });
 
@@ -805,6 +812,24 @@ class ${className} {
             const rememberCheckbox = document.getElementById('rememberScriptChoice');
             if (rememberCheckbox) {
                 rememberCheckbox.checked = false;
+                const rememberLabel = rememberCheckbox.closest('.theme-checkbox');
+                if (rememberLabel) {
+                    rememberLabel.classList.remove('theme-checkbox--checked');
+                }
+
+                if (!rememberCheckbox.dataset.styled) {
+                    rememberCheckbox.addEventListener('change', () => {
+                        const label = rememberCheckbox.closest('.theme-checkbox');
+                        if (label) {
+                            if (rememberCheckbox.checked) {
+                                label.classList.add('theme-checkbox--checked');
+                            } else {
+                                label.classList.remove('theme-checkbox--checked');
+                            }
+                        }
+                    });
+                    rememberCheckbox.dataset.styled = 'true';
+                }
             }
 
             // Show the modal

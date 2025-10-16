@@ -89,13 +89,17 @@
                             <button class="btn" id="envPromptBtn" onclick="window.chat.openEnvironmentEditor()">Environment</button>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            <label style="color: #888; font-size: 12px; display: flex; align-items: center; gap: 5px;">
-                                Tool Iterations:
+                            <label class="chat-control-label chat-control-number">
+                                <span class="chat-control-text">Tool Iterations</span>
                                 <input type="number" id="maxIterations" min="1" max="50" value="10"
-                                       style="width: 50px; padding: 4px; background: #2a2a2a; border: 1px solid #3a3a3a;
-                                              color: #e0e0e0; border-radius: 4px; font-size: 12px;"
+                                       class="chat-control-input"
                                        onchange="window.chat && window.chat.updateMaxIterations(this.value)"
                                        title="Maximum tool call iterations before pausing">
+                            </label>
+                            <label class="chat-control-label chat-control-toggle">
+                                <input type="checkbox" id="minimizeTokensToggle" class="chat-toggle-input" checked>
+                                <span class="chat-toggle-indicator" aria-hidden="true"></span>
+                                <span class="chat-control-text">Minimize Tokens</span>
                             </label>
                             <button class="btn" id="exportChatBtn" onclick="window.chat.exportChatHistory()">Export Chat</button>
                             <button class="btn" id="importChatBtn" onclick="document.getElementById('chatHistoryInput').click()">Import Chat</button>
@@ -175,9 +179,10 @@
                 </div>
             </div>
             <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #e0e0e0; font-size: 14px;">
-                    <input type="checkbox" id="rememberScriptChoice" style="cursor: pointer;">
-                    <span>Remember my choice</span>
+                <label class="theme-checkbox theme-checkbox--inline">
+                    <input type="checkbox" id="rememberScriptChoice" class="theme-checkbox-input">
+                    <span class="theme-checkbox-indicator" aria-hidden="true"></span>
+                    <span class="theme-checkbox-text">Remember my choice</span>
                 </label>
                 <button class="btn btn-primary" onclick="window.scriptInclusionModal.proceed()">Add to Selected Files</button>
             </div>

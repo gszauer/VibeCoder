@@ -586,9 +586,108 @@ class AIManager {
         this.conversationHistory = [];
     }
 
+    cloneMessage(message) {
+        if (typeof structuredClone === 'function') {
+            return structuredClone(message);
+        }
+        return JSON.parse(JSON.stringify(message));
+    }
+
     // Add a message to history
     addMessage(role, content) {
         this.conversationHistory.push({ role, content });
+    }
+
+    buildToolSummary(toolMeta) {
+        const name = toolMeta && toolMeta.name ? toolMeta.name : 'tool';
+        if (!toolMeta) {
+            return `completed tool call ${name}`;
+        }
+        return toolMeta.isError ? `failed tool call ${name}` : `successfully called ${name}`;
+    }
+
+    getHistoryView(minimizeTokens = false) {
+        if (!minimizeTokens) {
+            return this.conversationHistory.map((msg) => this.cloneMessage(msg));
+        }
+
+        const history = this.conversationHistory;
+        const abridged = [];
+
+        let lastUserIndex = -1;
+        for (let i = history.length - 1; i >= 0; i--) {
+            const msg = history[i];
+            if (msg.role === 'user' && typeof msg.content === 'string') {
+                lastUserIndex = i;
+                break;
+            }
+        }
+
+        if (lastUserIndex === -1) {
+            return history.map((msg) => this.cloneMessage(msg));
+        }
+
+        const toolInfo = new Map();
+        for (const msg of history) {
+            if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                for (const part of msg.content) {
+                    if (part.type === 'tool_use') {
+                        toolInfo.set(part.id, { name: part.name });
+                    }
+                }
+            } else if (msg.role === 'user' && Array.isArray(msg.content)) {
+                for (const part of msg.content) {
+                    if (part.type === 'tool_result' && part.tool_use_id) {
+                        const entry = toolInfo.get(part.tool_use_id) || {};
+                        entry.isError = part.is_error || false;
+                        if (!entry.name && part.name) {
+                            entry.name = part.name;
+                        }
+                        toolInfo.set(part.tool_use_id, entry);
+                    }
+                }
+            }
+        }
+
+        for (let i = 0; i < history.length; i++) {
+            const msg = history[i];
+            const isBeforeLastUser = i < lastUserIndex;
+
+            if (!isBeforeLastUser) {
+                abridged.push(this.cloneMessage(msg));
+                continue;
+            }
+
+            if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                const transformed = this.cloneMessage(msg);
+                transformed.content = [];
+
+                for (const part of msg.content) {
+                    if (part.type === 'text') {
+                        transformed.content.push({ type: 'text', text: part.text });
+                    } else if (part.type === 'tool_use') {
+                        const meta = toolInfo.get(part.id) || { name: part.name, isError: false };
+                        transformed.content.push({
+                            type: 'text',
+                            text: this.buildToolSummary(meta)
+                        });
+                    }
+                }
+
+                if (transformed.content.length > 0) {
+                    abridged.push(transformed);
+                }
+                continue;
+            }
+
+            if (msg.role === 'user' && Array.isArray(msg.content) && msg.content[0]?.type === 'tool_result') {
+                continue;
+            }
+
+            abridged.push(this.cloneMessage(msg));
+        }
+
+        return abridged;
     }
 
     // Main method to send a message and handle tool calling
@@ -607,7 +706,7 @@ class AIManager {
         }
 
         // Prepare messages with system prompt if set
-        let messages = [...this.conversationHistory];
+        let messages = this.getHistoryView(options.minimizeTokens);
         if (this.systemPrompt && messages[0]?.role !== 'system') {
             messages.unshift({ role: 'system', content: this.systemPrompt });
         }

@@ -43,6 +43,16 @@ Be concise, accurate, and helpful.`;
                         localStorage.getItem('tool_filter_filesystem') === 'true' : false
         };
 
+        this.minimizeTokens = localStorage.getItem('minimize_tokens') !== 'false';
+        this.minimizeTokensToggle = document.getElementById('minimizeTokensToggle');
+        if (this.minimizeTokensToggle) {
+            this.minimizeTokensToggle.checked = this.minimizeTokens;
+        }
+
+        this.loadingIndicator = null;
+        this.pendingContinueButton = null;
+        this.currentContinueButton = null;
+
         // Setup will complete after model config loads
         this.setupEventListeners();
 
@@ -1613,52 +1623,31 @@ Be concise, accurate, and helpful.`;
                 const chatData = JSON.parse(savedChat.content);
 
                 // Restore chat data
-                this.messages = chatData.messages || [];
+                const restoredMessages = chatData.messages
+                    ? (typeof structuredClone === 'function'
+                        ? structuredClone(chatData.messages)
+                        : JSON.parse(JSON.stringify(chatData.messages)))
+                    : [];
+
+                this.messages = restoredMessages;
                 this.totalTokens = chatData.totalTokens || 0;
                 this.totalCost = chatData.totalCost || 0;
                 this.currentContextTokens = chatData.currentContextTokens || 0;
 
                 // Restore messages to AI Manager if it exists
-                if (this.aiManager && chatData.messages) {
+                if (this.aiManager) {
                     this.aiManager.clearHistory();
-                    // Directly set the conversation history since we're now saving the full structure
-                    this.aiManager.conversationHistory = [...chatData.messages];
+                    this.aiManager.conversationHistory = restoredMessages.map((msg) =>
+                        this.aiManager.cloneMessage ? this.aiManager.cloneMessage(msg) : JSON.parse(JSON.stringify(msg))
+                    );
                     console.log('Restored full conversation history with tool calls to AI Manager');
                 }
 
-                // Clear and rebuild chat UI
-                this.chatWindow.innerHTML = '';
+                this.pendingContinueButton = null;
+                this.currentContinueButton = null;
+                this.loadingIndicator = null;
 
-                // Replay messages in UI including tool results
-                for (let msg of this.messages) {
-                    if (msg.role === 'user') {
-                        // Check if this is a tool result message
-                        if (Array.isArray(msg.content) && msg.content[0]?.type === 'tool_result') {
-                            // Display tool results
-                            for (let result of msg.content) {
-                                if (result.type === 'tool_result') {
-                                    this.addToolResult(result.content);
-                                }
-                            }
-                        } else if (typeof msg.content === 'string') {
-                            // Regular user message
-                            this.addMessage(msg.content, 'user');
-                        }
-                    } else if (msg.role === 'assistant') {
-                        // Check if it's a tool use message
-                        if (Array.isArray(msg.content)) {
-                            for (let content of msg.content) {
-                                if (content.type === 'text') {
-                                    this.addMessage(content.text, 'assistant', msg.metadata);
-                                } else if (content.type === 'tool_use') {
-                                    this.addToolUse(content.name, content.input);
-                                }
-                            }
-                        } else if (typeof msg.content === 'string') {
-                            this.addMessage(msg.content, 'assistant', msg.metadata);
-                        }
-                    }
-                }
+                this.renderChatHistory();
 
                 // Update displays
                 this.updateTokenDisplay();
@@ -1724,59 +1713,38 @@ Be concise, accurate, and helpful.`;
                 const chatData = JSON.parse(e.target.result);
 
                 // Restore chat data
-                this.messages = chatData.messages || [];
+                const restoredMessages = chatData.messages
+                    ? (typeof structuredClone === 'function'
+                        ? structuredClone(chatData.messages)
+                        : JSON.parse(JSON.stringify(chatData.messages)))
+                    : [];
+
+                this.messages = restoredMessages;
                 this.totalTokens = chatData.totalTokens || 0;
                 this.totalCost = chatData.totalCost || 0;
                 this.currentContextTokens = chatData.currentContextTokens || 0;
 
                 // Restore messages to AI Manager if it exists
-                if (this.aiManager && chatData.messages) {
+                if (this.aiManager) {
                     this.aiManager.clearHistory();
-                    // Directly set the conversation history since we're now saving the full structure
-                    this.aiManager.conversationHistory = [...chatData.messages];
+                    this.aiManager.conversationHistory = restoredMessages.map((msg) =>
+                        this.aiManager.cloneMessage ? this.aiManager.cloneMessage(msg) : JSON.parse(JSON.stringify(msg))
+                    );
                     console.log('Restored full conversation history with tool calls to AI Manager');
                 }
 
-                // Clear and rebuild chat UI
-                this.chatWindow.innerHTML = '';
+                this.pendingContinueButton = null;
+                this.currentContinueButton = null;
+                this.loadingIndicator = null;
 
-                // Replay messages in UI including tool results
-                for (let msg of this.messages) {
-                    if (msg.role === 'user') {
-                        // Check if this is a tool result message
-                        if (Array.isArray(msg.content) && msg.content[0]?.type === 'tool_result') {
-                            // Display tool results
-                            for (let result of msg.content) {
-                                if (result.type === 'tool_result') {
-                                    this.addToolResult(result.content);
-                                }
-                            }
-                        } else if (typeof msg.content === 'string') {
-                            // Regular user message
-                            this.addMessage(msg.content, 'user');
-                        }
-                    } else if (msg.role === 'assistant') {
-                        // Check if it's a tool use message
-                        if (Array.isArray(msg.content)) {
-                            for (let content of msg.content) {
-                                if (content.type === 'text') {
-                                    this.addMessage(content.text, 'assistant', msg.metadata);
-                                } else if (content.type === 'tool_use') {
-                                    this.addToolUse(content.name, content.input);
-                                }
-                            }
-                        } else if (typeof msg.content === 'string') {
-                            this.addMessage(msg.content, 'assistant', msg.metadata);
-                        }
-                    }
-                }
+                this.renderChatHistory();
 
                 // Update displays
                 this.updateTokenDisplay();
                 this.addSystemMessage(`Loaded chat history from ${chatData.timestamp}`);
 
                 // Save the imported chat to IndexedDB
-                this.autosaveChatHistory().then(() => {
+                this.autoSaveChatHistory().then(() => {
                     console.log('Imported chat history saved to storage');
                 }).catch((error) => {
                     console.error('Error saving imported chat:', error);
@@ -1795,6 +1763,10 @@ Be concise, accurate, and helpful.`;
         this.totalCost = 0;
         this.currentContextTokens = 0;
         this.chatWindow.innerHTML = '';
+
+        this.pendingContinueButton = null;
+        this.currentContinueButton = null;
+        this.loadingIndicator = null;
 
         // Clear AI Manager history if it exists
         if (this.aiManager) {
@@ -1913,6 +1885,14 @@ Be concise, accurate, and helpful.`;
                 e.target.value = '';
             }
         });
+
+        if (this.minimizeTokensToggle) {
+            this.minimizeTokensToggle.addEventListener('change', (e) => {
+                this.minimizeTokens = e.target.checked;
+                localStorage.setItem('minimize_tokens', this.minimizeTokens ? 'true' : 'false');
+                this.renderChatHistory();
+            });
+        }
     }
 
     loadApiKey() {
@@ -2188,6 +2168,71 @@ Be concise, accurate, and helpful.`;
         this.chatWindow.scrollTop = this.chatWindow.scrollHeight;
     }
 
+    renderChatHistory() {
+        if (!this.chatWindow) {
+            return;
+        }
+
+        const history = this.aiManager
+            ? this.aiManager.getHistoryView(this.minimizeTokens)
+            : (Array.isArray(this.messages) ? this.messages : []);
+
+        this.chatWindow.innerHTML = '';
+        this.currentContinueButton = null;
+
+        for (const msg of history) {
+            if (!msg) {
+                continue;
+            }
+
+            if (msg.role === 'system') {
+                continue;
+            }
+
+            if (msg.role === 'user') {
+                if (typeof msg.content === 'string') {
+                    this.addMessage(msg.content, 'user');
+                } else if (Array.isArray(msg.content)) {
+                    if (msg.content[0]?.type === 'tool_result') {
+                        for (const result of msg.content) {
+                            if (result.type === 'tool_result') {
+                                this.addToolResult(result.content);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (msg.role === 'assistant') {
+                if (typeof msg.content === 'string') {
+                    this.addMessage(msg.content, 'assistant', msg.metadata || null);
+                } else if (Array.isArray(msg.content)) {
+                    let metadataUsed = false;
+                    for (const part of msg.content) {
+                        if (part.type === 'text') {
+                            const meta = !metadataUsed ? (msg.metadata || null) : null;
+                            metadataUsed = true;
+                            this.addMessage(part.text, 'assistant', meta);
+                        } else if (part.type === 'tool_use') {
+                            this.addToolUse(part.name, part.input);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (this.loadingIndicator) {
+            this.chatWindow.appendChild(this.loadingIndicator);
+        }
+
+        if (this.pendingContinueButton) {
+            this.renderPendingContinueButton();
+        }
+
+        this.chatWindow.scrollTop = this.chatWindow.scrollHeight;
+    }
+
     async sendMessage() {
         const content = this.messageInput.value.trim();
         if (!content) return;
@@ -2221,14 +2266,12 @@ Be concise, accurate, and helpful.`;
         // Add to local messages array for persistence
         this.messages.push({ role: 'user', content: content });
 
-        // Show loading indicator
+        // Prepare loading indicator but append after potential re-render
         const loadingDiv = document.createElement('div');
         loadingDiv.className = 'message assistant';
         loadingDiv.innerHTML = '<div class="loading"></div>';
-        this.chatWindow.appendChild(loadingDiv);
 
         try {
-            // Get selected model
             const model = this.modelSelect.value;
 
             console.log('Sending message with:', {
@@ -2238,20 +2281,38 @@ Be concise, accurate, and helpful.`;
                 currentProviderName: this.aiManager.currentProvider
             });
 
-            // Send message through AI Manager
-            const response = await this.aiManager.sendMessage(content, {
+            const sendPromise = this.aiManager.sendMessage(content, {
                 model: model,
                 maxTokens: 4096,
                 temperature: 0.7,
-                maxIterations: this.maxIterations  // Use configured max iterations
+                maxIterations: this.maxIterations,
+                minimizeTokens: this.minimizeTokens
             });
 
-            this.chatWindow.removeChild(loadingDiv);
+            if (this.minimizeTokens) {
+                this.renderChatHistory();
+            }
 
-            // Process the response
+            this.loadingIndicator = loadingDiv;
+            this.chatWindow.appendChild(loadingDiv);
+
+            const response = await sendPromise;
+
+            if (this.chatWindow.contains(loadingDiv)) {
+                this.chatWindow.removeChild(loadingDiv);
+            }
+            this.loadingIndicator = null;
+
             await this.processUnifiedResponse(response);
+
+            if (this.minimizeTokens) {
+                this.renderChatHistory();
+            }
         } catch (error) {
-            this.chatWindow.removeChild(loadingDiv);
+            if (this.chatWindow.contains(loadingDiv)) {
+                this.chatWindow.removeChild(loadingDiv);
+            }
+            this.loadingIndicator = null;
             this.addSystemMessage(`Error: ${error.message}`);
             console.error(`Error calling ${this.currentProvider}:`, error);
         }
@@ -2311,6 +2372,23 @@ Be concise, accurate, and helpful.`;
                 content: response.content,
                 metadata: metadata
             });
+
+            const history = this.aiManager ? this.aiManager.getHistory() : null;
+            if (history && history.length > 0) {
+                for (let i = history.length - 1; i >= 0; i--) {
+                    const entry = history[i];
+                    if (entry.role === 'assistant') {
+                        if (typeof entry.content === 'string') {
+                            entry.metadata = metadata;
+                            break;
+                        }
+                        if (Array.isArray(entry.content) && !entry.metadata) {
+                            entry.metadata = metadata;
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         // Check if we need to show a continuation button
@@ -2324,8 +2402,7 @@ Be concise, accurate, and helpful.`;
         }
     }
 
-    // Show a button to continue tool processing
-    showContinueToolsButton(iterationsUsed, maxIterations) {
+    buildContinueToolsButton(iterationsUsed, maxIterations) {
         const buttonContainer = document.createElement('div');
         buttonContainer.className = 'continue-tools-container';
         buttonContainer.style.cssText = `
@@ -2353,34 +2430,72 @@ Be concise, accurate, and helpful.`;
         continueBtn.onclick = async () => {
             // Remove the button
             buttonContainer.remove();
+            this.pendingContinueButton = null;
+            this.currentContinueButton = null;
 
             // Show loading
             const loadingDiv = document.createElement('div');
             loadingDiv.className = 'message assistant';
             loadingDiv.innerHTML = '<div class="loading"></div> Continuing tool processing...';
+            const sendPromise = this.aiManager.sendMessage('__continue_tools__', {
+                model: this.modelSelect.value,
+                maxTokens: 4096,
+                temperature: 0.7,
+                maxIterations: 20,
+                minimizeTokens: this.minimizeTokens
+            });
+
+            if (this.minimizeTokens) {
+                this.renderChatHistory();
+            }
+
+            this.loadingIndicator = loadingDiv;
             this.chatWindow.appendChild(loadingDiv);
 
             try {
-                // Send continuation signal with higher iteration limit
-                const response = await this.aiManager.sendMessage('__continue_tools__', {
-                    model: this.modelSelect.value,
-                    maxTokens: 4096,
-                    temperature: 0.7,
-                    maxIterations: 20  // Allow more iterations for continuation
-                });
+                const response = await sendPromise;
 
-                this.chatWindow.removeChild(loadingDiv);
+                if (this.chatWindow.contains(loadingDiv)) {
+                    this.chatWindow.removeChild(loadingDiv);
+                }
+                this.loadingIndicator = null;
 
-                // Process the response
                 await this.processUnifiedResponse(response);
+
+                if (this.minimizeTokens) {
+                    this.renderChatHistory();
+                }
             } catch (error) {
-                this.chatWindow.removeChild(loadingDiv);
+                if (this.chatWindow.contains(loadingDiv)) {
+                    this.chatWindow.removeChild(loadingDiv);
+                }
+                this.loadingIndicator = null;
                 this.addSystemMessage(`Error continuing tools: ${error.message}`);
                 console.error('Error continuing tool processing:', error);
             }
         };
 
         buttonContainer.appendChild(continueBtn);
+        return buttonContainer;
+    }
+
+    renderPendingContinueButton() {
+        if (!this.pendingContinueButton) {
+            return;
+        }
+
+        const { iterationsUsed, maxIterations } = this.pendingContinueButton;
+        const buttonContainer = this.buildContinueToolsButton(iterationsUsed, maxIterations);
+        this.currentContinueButton = buttonContainer;
+        this.chatWindow.appendChild(buttonContainer);
+        this.chatWindow.scrollTop = this.chatWindow.scrollHeight;
+    }
+
+    // Show a button to continue tool processing
+    showContinueToolsButton(iterationsUsed, maxIterations) {
+        this.pendingContinueButton = { iterationsUsed, maxIterations };
+        const buttonContainer = this.buildContinueToolsButton(iterationsUsed, maxIterations);
+        this.currentContinueButton = buttonContainer;
         this.chatWindow.appendChild(buttonContainer);
         this.chatWindow.scrollTop = this.chatWindow.scrollHeight;
     }
