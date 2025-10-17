@@ -70,6 +70,18 @@ window.toggleFileSection = function() {
     }
 }
 
+function setupSectionToggles() {
+    const apiToggle = document.getElementById('apiToggle');
+    if (apiToggle) {
+        apiToggle.addEventListener('click', window.toggleApiSection);
+    }
+
+    const fileToggle = document.getElementById('fileToggle');
+    if (fileToggle) {
+        fileToggle.addEventListener('click', window.toggleFileSection);
+    }
+}
+
 // Update API status display
 function updateApiStatus() {
     const providerSelect = document.getElementById('providerSelect');
@@ -166,8 +178,14 @@ function updateApiStatus() {
 }
 
 // Initialize when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initApp);
-} else {
+function initializeWorkbench() {
+    setupSectionToggles();
     initApp();
 }
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeWorkbench);
+} else {
+    initializeWorkbench();
+}
+

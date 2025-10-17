@@ -308,31 +308,35 @@ class FileBrowserUI {
                             continue; // Don't save chat history as a regular file
                         }
 
-                        // Always read as base64 and store as data URL for consistency
-                        const base64 = await zipEntry.async('base64');
-
-                        // Guess MIME type based on extension
                         const fileName = path.toLowerCase();
-                        let mimeType = 'application/octet-stream';
+                        const textExtensions = [
+                            '.html', '.htm', '.css', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.json', '.jsonc', '.md',
+                            '.txt', '.xml', '.svg', '.yml', '.yaml', '.csv', '.ini', '.cfg', '.conf', '.env', '.py', '.rb',
+                            '.java', '.cs', '.cpp', '.h', '.hpp', '.rs', '.go', '.sh', '.bat', '.sql', '.toml', '.lock'
+                        ];
 
-                        // Common MIME types
-                        if (fileName.endsWith('.html') || fileName.endsWith('.htm')) mimeType = 'text/html';
-                        else if (fileName.endsWith('.css')) mimeType = 'text/css';
-                        else if (fileName.endsWith('.js')) mimeType = 'text/javascript';
-                        else if (fileName.endsWith('.json')) mimeType = 'application/json';
-                        else if (fileName.endsWith('.xml')) mimeType = 'text/xml';
-                        else if (fileName.endsWith('.txt')) mimeType = 'text/plain';
-                        else if (fileName.endsWith('.png')) mimeType = 'image/png';
-                        else if (fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')) mimeType = 'image/jpeg';
-                        else if (fileName.endsWith('.gif')) mimeType = 'image/gif';
-                        else if (fileName.endsWith('.pdf')) mimeType = 'application/pdf';
-                        else if (fileName.endsWith('.zip')) mimeType = 'application/zip';
+                        const isTextFile = textExtensions.some(ext => fileName.endsWith(ext));
 
-                        // Store as data URL
-                        const fileContent = `data:${mimeType};base64,${base64}`;
-                        console.log(`[DEBUG] Saving file: /${path} (mime: ${mimeType}, base64 length: ${base64.length})`);
+                        if (isTextFile) {
+                            const textContent = await zipEntry.async('string');
+                            console.log(`[DEBUG] Saving text file: /${path} (length: ${textContent.length})`);
+                            await this.fileSystem.saveFile('/' + path, textContent, 'file');
+                        } else {
+                            const base64 = await zipEntry.async('base64');
 
-                        await this.fileSystem.saveFile('/' + path, fileContent, 'file');
+                            let mimeType = 'application/octet-stream';
+                            if (fileName.endsWith('.png')) mimeType = 'image/png';
+                            else if (fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')) mimeType = 'image/jpeg';
+                            else if (fileName.endsWith('.gif')) mimeType = 'image/gif';
+                            else if (fileName.endsWith('.pdf')) mimeType = 'application/pdf';
+                            else if (fileName.endsWith('.zip')) mimeType = 'application/zip';
+                            else if (fileName.endsWith('.webp')) mimeType = 'image/webp';
+                            else if (fileName.endsWith('.ico')) mimeType = 'image/x-icon';
+
+                            const fileContent = `data:${mimeType};base64,${base64}`;
+                            console.log(`[DEBUG] Saving binary file: /${path} (mime: ${mimeType}, base64 length: ${base64.length})`);
+                            await this.fileSystem.saveFile('/' + path, fileContent, 'file');
+                        }
                         importedCount++;
                     } catch (err) {
                         console.error(`[ERROR] Failed to import file: ${path}`, err);

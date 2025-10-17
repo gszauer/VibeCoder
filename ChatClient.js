@@ -72,8 +72,33 @@ class ChatClient {
         this.pendingContinueButton = null;
         this.currentContinueButton = null;
 
+        this.messageContextData = new WeakMap();
+        this.activeContextMessage = null;
+        this.chatContextMenu = document.getElementById('chatContextMenu');
+        this.chatContextMenuItems = this.chatContextMenu ? {
+            copy: this.chatContextMenu.querySelector('[data-action="copy"]'),
+            edit: this.chatContextMenu.querySelector('[data-action="edit"]'),
+            remove: this.chatContextMenu.querySelector('[data-action="remove"]')
+        } : null;
+
+        this.chatBackgroundMenu = document.getElementById('chatBackgroundContextMenu');
+        this.chatBackgroundMenuItems = this.chatBackgroundMenu ? {
+            export: this.chatBackgroundMenu.querySelector('[data-action="export"]'),
+            import: this.chatBackgroundMenu.querySelector('[data-action="import"]'),
+            clear: this.chatBackgroundMenu.querySelector('[data-action="clear"]')
+        } : null;
+
+        this.handleGlobalClickForChatMenu = (event) => {
+            if (!this.chatContextMenu && !this.chatBackgroundMenu) return;
+            if (event.target.closest('#chatContextMenu') || event.target.closest('#chatBackgroundContextMenu')) {
+                return;
+            }
+            this.hideChatContextMenu();
+        };
+
         // Setup will complete after model config loads
         this.setupEventListeners();
+        this.setupChatContextMenu();
 
         this.updateLimitMessagesVisibility();
 
@@ -1760,6 +1785,9 @@ class ChatClient {
                     this.aiManager.conversationHistory = restoredMessages.map((msg) =>
                         this.aiManager.cloneMessage ? this.aiManager.cloneMessage(msg) : JSON.parse(JSON.stringify(msg))
                     );
+                    if (typeof this.aiManager.ensureHistoryMessageIds === 'function') {
+                        this.aiManager.ensureHistoryMessageIds();
+                    }
                     console.log('Restored full conversation history with tool calls to AI Manager');
                 }
 
@@ -1767,6 +1795,7 @@ class ChatClient {
                 this.currentContinueButton = null;
                 this.loadingIndicator = null;
 
+                this.syncLocalMessagesFromHistory();
                 this.renderChatHistory();
 
                 // Update displays
@@ -1847,6 +1876,9 @@ class ChatClient {
                     this.aiManager.conversationHistory = restoredMessages.map((msg) =>
                         this.aiManager.cloneMessage ? this.aiManager.cloneMessage(msg) : JSON.parse(JSON.stringify(msg))
                     );
+                    if (typeof this.aiManager.ensureHistoryMessageIds === 'function') {
+                        this.aiManager.ensureHistoryMessageIds();
+                    }
                     console.log('Restored full conversation history with tool calls to AI Manager');
                 }
 
@@ -2024,6 +2056,390 @@ class ChatClient {
         }
     }
 
+    setupChatContextMenu() {
+        const hasMessageMenu = !!this.chatContextMenu;
+        const hasBackgroundMenu = !!this.chatBackgroundMenu;
+
+        if (!hasMessageMenu && !hasBackgroundMenu) {
+            return;
+        }
+
+        if (hasMessageMenu) {
+            this.chatContextMenu.addEventListener('click', (event) => {
+                const target = event.target.closest('.context-menu-item');
+                if (!target) {
+                    return;
+                }
+                if (target.classList.contains('disabled')) {
+                    event.preventDefault();
+                    return;
+                }
+
+                const action = target.dataset.action;
+                if (!action || !this.activeContextMessage) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                this.hideChatContextMenu();
+                this.handleChatContextAction(action, this.activeContextMessage.data);
+            });
+        }
+
+        if (hasBackgroundMenu) {
+            this.chatBackgroundMenu.addEventListener('click', (event) => {
+                const target = event.target.closest('.context-menu-item');
+                if (!target) {
+                    return;
+                }
+                if (target.classList.contains('disabled')) {
+                    event.preventDefault();
+                    return;
+                }
+
+                const action = target.dataset.action;
+                event.preventDefault();
+                event.stopPropagation();
+                this.hideChatContextMenu();
+                this.handleChatBackgroundAction(action);
+            });
+        }
+
+        document.addEventListener('click', this.handleGlobalClickForChatMenu);
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                this.hideChatContextMenu();
+            }
+        });
+        window.addEventListener('blur', () => this.hideChatContextMenu());
+        if (this.chatWindow) {
+            this.chatWindow.addEventListener('scroll', () => this.hideChatContextMenu(), { passive: true });
+
+            this.chatWindow.addEventListener('contextmenu', (event) => {
+                if (event.target.closest('.message-container')) {
+                    return;
+                }
+                if (!this.chatBackgroundMenu) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                this.showChatBackgroundMenu(event);
+            });
+        }
+    }
+
+    registerMessageContext(element, contextData) {
+        if (!this.chatContextMenu || !element) {
+            return;
+        }
+
+        const mergedData = Object.assign({
+            messageId: null,
+            type: 'assistant',
+            copyText: null,
+            toolCallId: null,
+            summaryToolIds: [],
+            role: contextData.role || null
+        }, contextData);
+
+        if (typeof contextData.copyText === 'function') {
+            mergedData.copyText = contextData.copyText;
+        } else {
+            mergedData.copyText = () => {
+                const messageEl = element.querySelector('.message');
+                return messageEl ? messageEl.innerText || messageEl.textContent || '' : '';
+            };
+        }
+
+        this.messageContextData.set(element, mergedData);
+
+        element.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const data = this.messageContextData.get(element);
+            if (!data) {
+                return;
+            }
+            this.showChatContextMenu(event, element, data);
+        });
+    }
+
+    showChatContextMenu(event, element, data) {
+        if (!this.chatContextMenu) {
+            return;
+        }
+
+        if (this.chatBackgroundMenu) {
+            this.chatBackgroundMenu.classList.remove('show');
+        }
+
+        this.activeContextMessage = { element, data };
+
+        if (this.chatContextMenuItems?.edit) {
+            const shouldDisableEdit = this.isEditDisabledForContext(data);
+            this.toggleContextMenuItemDisabled(this.chatContextMenuItems.edit, shouldDisableEdit);
+        }
+
+        this.chatContextMenu.style.left = `${event.pageX}px`;
+        this.chatContextMenu.style.top = `${event.pageY}px`;
+        this.chatContextMenu.classList.add('show');
+    }
+
+    showChatBackgroundMenu(event) {
+        if (!this.chatBackgroundMenu) {
+            return;
+        }
+
+        if (this.chatContextMenu) {
+            this.chatContextMenu.classList.remove('show');
+        }
+
+        this.activeContextMessage = null;
+        this.chatBackgroundMenu.style.left = `${event.pageX}px`;
+        this.chatBackgroundMenu.style.top = `${event.pageY}px`;
+        this.chatBackgroundMenu.classList.add('show');
+    }
+
+    hideChatContextMenu() {
+        if (this.chatContextMenu) {
+            this.chatContextMenu.classList.remove('show');
+        }
+        if (this.chatBackgroundMenu) {
+            this.chatBackgroundMenu.classList.remove('show');
+        }
+        this.activeContextMessage = null;
+    }
+
+    handleChatBackgroundAction(action) {
+        switch (action) {
+            case 'export':
+                this.exportChatHistory();
+                break;
+            case 'import': {
+                const input = document.getElementById('chatHistoryInput');
+                if (input) {
+                    input.click();
+                }
+                break;
+            }
+            case 'clear':
+                if (window.confirm('Clear all messages?')) {
+                    this.clearChat();
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    toggleContextMenuItemDisabled(item, disabled) {
+        if (!item) {
+            return;
+        }
+        if (disabled) {
+            item.classList.add('disabled');
+        } else {
+            item.classList.remove('disabled');
+        }
+    }
+
+    isEditDisabledForContext(data) {
+        if (!data) {
+            return true;
+        }
+        const type = data.type;
+        if (data.messageId === undefined || data.messageId === null) {
+            return true;
+        }
+        return type === 'tool_use' || type === 'tool_result' || type === 'tool_summary' || type === 'system';
+    }
+
+    handleChatContextAction(action, data) {
+        switch (action) {
+            case 'copy':
+                this.copyContextMessage(data);
+                break;
+            case 'edit':
+                this.editContextMessage(data);
+                break;
+            case 'remove':
+                this.removeContextMessage(data);
+                break;
+            default:
+                break;
+        }
+    }
+
+    copyContextMessage(data) {
+        if (!data) {
+            return;
+        }
+        const text = data.copyText ? data.copyText() : '';
+        if (!text) {
+            return;
+        }
+
+        navigator.clipboard.writeText(text).catch((error) => {
+            console.error('Failed to copy chat message:', error);
+        });
+    }
+
+    editContextMessage(data) {
+        if (!data || this.isEditDisabledForContext(data)) {
+            return;
+        }
+
+        const message = this.getConversationMessageById(data.messageId);
+        if (!message) {
+            console.warn('Unable to find message for editing:', data.messageId);
+            return;
+        }
+
+        let originalText = '';
+        if (typeof message.content === 'string') {
+            originalText = message.content;
+        } else {
+            const textPart = Array.isArray(message.content)
+                ? message.content.find(part => part && part.type === 'text')
+                : null;
+            originalText = textPart && textPart.text ? textPart.text : '';
+        }
+
+        const updated = window.prompt('Edit message content:', originalText);
+        if (updated === null) {
+            return;
+        }
+
+        const newText = updated.trim();
+        if (!newText) {
+            this.removeContextMessage(data);
+            return;
+        }
+
+        if (typeof message.content === 'string') {
+            message.content = newText;
+        } else if (Array.isArray(message.content)) {
+            const textPart = message.content.find(part => part && part.type === 'text');
+            if (textPart) {
+                textPart.text = newText;
+            } else {
+                message.content.unshift({ type: 'text', text: newText });
+            }
+        }
+
+        this.syncLocalMessagesFromHistory();
+        this.renderChatHistory();
+        if (this.autoSave) {
+            this.autoSaveChatHistory();
+        }
+    }
+
+    removeContextMessage(data) {
+        if (!data) {
+            return;
+        }
+
+        const idsToRemove = new Set();
+        const toolIdsToRemove = new Set();
+
+        if (data.messageId !== null && data.messageId !== undefined) {
+            idsToRemove.add(data.messageId);
+        }
+
+        if (Array.isArray(data.summaryToolIds)) {
+            for (const id of data.summaryToolIds) {
+                toolIdsToRemove.add(id);
+            }
+        }
+
+        if (data.toolCallId) {
+            toolIdsToRemove.add(data.toolCallId);
+        }
+
+        if (data.type === 'tool_result' && data.toolCallId) {
+            toolIdsToRemove.add(data.toolCallId);
+        }
+
+        if (toolIdsToRemove.size > 0 && this.aiManager) {
+            const history = this.aiManager.getHistory();
+            let changed = true;
+            while (changed) {
+                changed = false;
+                for (const entry of history) {
+                    if (!entry) continue;
+
+                    if (entry.role === 'assistant' && Array.isArray(entry.content)) {
+                        const hasTool = entry.content.some(part => part.type === 'tool_use' && toolIdsToRemove.has(part.id));
+                        if (hasTool && entry._id !== undefined && !idsToRemove.has(entry._id)) {
+                            idsToRemove.add(entry._id);
+                            changed = true;
+                        }
+                    } else if (entry.role === 'user' && Array.isArray(entry.content)) {
+                        const hasResult = entry.content.some(part => part.type === 'tool_result' && toolIdsToRemove.has(part.tool_use_id));
+                        if (hasResult && entry._id !== undefined && !idsToRemove.has(entry._id)) {
+                            idsToRemove.add(entry._id);
+                            changed = true;
+                        }
+                    }
+
+                    if (entry.metadata?.summaryToolIds && entry.metadata.summaryToolIds.length > 0) {
+                        const shared = entry.metadata.summaryToolIds.some(id => toolIdsToRemove.has(id));
+                        if (shared && entry._id !== undefined && !idsToRemove.has(entry._id)) {
+                            idsToRemove.add(entry._id);
+                            changed = true;
+                        }
+                        const beforeSize = toolIdsToRemove.size;
+                        for (const toolId of entry.metadata.summaryToolIds) {
+                            if (!toolIdsToRemove.has(toolId)) {
+                                toolIdsToRemove.add(toolId);
+                            }
+                        }
+                        if (toolIdsToRemove.size > beforeSize) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (idsToRemove.size === 0) {
+            return;
+        }
+
+        if (this.aiManager) {
+            this.aiManager.conversationHistory = this.aiManager.conversationHistory.filter(entry => !idsToRemove.has(entry._id));
+        }
+
+        this.syncLocalMessagesFromHistory();
+        this.renderChatHistory();
+        if (this.autoSave) {
+            this.autoSaveChatHistory();
+        }
+    }
+
+    getConversationMessageById(messageId) {
+        if (messageId === undefined || messageId === null) {
+            return null;
+        }
+        if (!this.aiManager) {
+            return null;
+        }
+        return this.aiManager.conversationHistory.find(entry => entry && entry._id === messageId) || null;
+    }
+
+    syncLocalMessagesFromHistory() {
+        if (!this.aiManager) {
+            return;
+        }
+        const history = this.aiManager.getHistory();
+        if (Array.isArray(history)) {
+            this.messages = history.map(entry => this.aiManager.cloneMessage ? this.aiManager.cloneMessage(entry) : JSON.parse(JSON.stringify(entry)));
+        }
+    }
+
     loadApiKey() {
         // This method is now handled by loadCurrentApiKey and loadAllApiKeys
         // Kept for backward compatibility
@@ -2104,6 +2520,12 @@ class ChatClient {
 
     addMessage(content, role, metadata = null) {
         const isToolSummary = !!(metadata && metadata.toolSummary);
+        const messageId = metadata && Object.prototype.hasOwnProperty.call(metadata, 'messageId')
+            ? metadata.messageId
+            : null;
+        const summaryToolIds = Array.isArray(metadata?.summaryToolIds)
+            ? [...metadata.summaryToolIds]
+            : [];
 
         const containerDiv = document.createElement('div');
         containerDiv.className = `message-container ${role}`;
@@ -2191,7 +2613,10 @@ class ChatClient {
         const copyButton = document.createElement('button');
         copyButton.className = 'copy-button';
         copyButton.textContent = 'Copy';
-        copyButton.onclick = () => this.copyToClipboard(content, copyButton);
+        copyButton.onclick = () => {
+            const textToCopy = messageDiv.innerText || messageDiv.textContent || content;
+            this.copyToClipboard(textToCopy, copyButton);
+        };
 
         if (role === 'user') {
             containerDiv.appendChild(copyButton);
@@ -2203,6 +2628,15 @@ class ChatClient {
 
         this.chatWindow.appendChild(containerDiv);
         this.chatWindow.scrollTop = this.chatWindow.scrollHeight;
+
+        const contextData = {
+            messageId,
+            type: isToolSummary ? 'tool_summary' : role,
+            copyText: typeof content === 'string' ? content : messageDiv.textContent,
+            summaryToolIds,
+            role
+        };
+        this.registerMessageContext(containerDiv, contextData);
     }
 
     getModelDisplayName(provider, model) {
@@ -2241,7 +2675,7 @@ class ChatClient {
         }
     }
 
-    addToolUse(toolName, input) {
+    addToolUse(toolName, input, options = {}) {
         const containerDiv = document.createElement('div');
         containerDiv.className = 'message-container tool-use';
 
@@ -2268,16 +2702,28 @@ class ChatClient {
         const copyButton = document.createElement('button');
         copyButton.className = 'copy-button';
         copyButton.textContent = 'Copy';
-        copyButton.onclick = () => this.copyToClipboard(content, copyButton);
+        copyButton.onclick = () => {
+            const textToCopy = messageDiv.innerText || messageDiv.textContent || content;
+            this.copyToClipboard(textToCopy, copyButton);
+        };
 
         containerDiv.appendChild(messageWrapper);
         containerDiv.appendChild(copyButton);
 
         this.chatWindow.appendChild(containerDiv);
         this.chatWindow.scrollTop = this.chatWindow.scrollHeight;
+
+        const contextData = {
+            type: 'tool_use',
+            messageId: options.messageId ?? null,
+            toolCallId: options.toolCallId ?? null,
+            copyText: content,
+            role: 'assistant'
+        };
+        this.registerMessageContext(containerDiv, contextData);
     }
 
-    addToolResult(result, isError = false) {
+    addToolResult(result, isError = false, options = {}) {
         const containerDiv = document.createElement('div');
         containerDiv.className = 'message-container tool-result';
 
@@ -2305,19 +2751,33 @@ class ChatClient {
         const copyButton = document.createElement('button');
         copyButton.className = 'copy-button';
         copyButton.textContent = 'Copy';
-        copyButton.onclick = () => this.copyToClipboard(result, copyButton);
+        copyButton.onclick = () => {
+            const textToCopy = messageDiv.innerText || messageDiv.textContent || result;
+            this.copyToClipboard(textToCopy, copyButton);
+        };
 
         containerDiv.appendChild(messageWrapper);
         containerDiv.appendChild(copyButton);
 
         this.chatWindow.appendChild(containerDiv);
         this.chatWindow.scrollTop = this.chatWindow.scrollHeight;
+
+        const contextData = {
+            type: 'tool_result',
+            messageId: options.messageId ?? null,
+            toolCallId: options.toolCallId ?? null,
+            copyText: content,
+            role: 'user'
+        };
+        this.registerMessageContext(containerDiv, contextData);
     }
 
     renderChatHistory() {
         if (!this.chatWindow) {
             return;
         }
+
+        this.hideChatContextMenu();
 
         const limitMessages = this.limitMessages > 0 ? this.limitMessages : 0;
         const history = this.aiManager
@@ -2345,12 +2805,16 @@ class ChatClient {
 
             if (msg.role === 'user') {
                 if (typeof msg.content === 'string') {
-                    this.addMessage(msg.content, 'user');
+                    const meta = Object.assign({}, msg.metadata || {}, { messageId: msg._id });
+                    this.addMessage(msg.content, 'user', meta);
                 } else if (Array.isArray(msg.content)) {
                     if (msg.content[0]?.type === 'tool_result') {
                         for (const result of msg.content) {
                             if (result.type === 'tool_result') {
-                                this.addToolResult(result.content, !!result.is_error);
+                                this.addToolResult(result.content, !!result.is_error, {
+                                    messageId: msg._id,
+                                    toolCallId: result.tool_use_id
+                                });
                             }
                         }
                     }
@@ -2360,7 +2824,8 @@ class ChatClient {
 
             if (msg.role === 'assistant') {
                 if (typeof msg.content === 'string') {
-                    this.addMessage(msg.content, 'assistant', msg.metadata || null);
+                    const meta = Object.assign({}, msg.metadata || {}, { messageId: msg._id });
+                    this.addMessage(msg.content, 'assistant', meta);
                 } else if (Array.isArray(msg.content)) {
                     let metadataUsed = false;
                     let pendingToolResults = new Map();
@@ -2376,21 +2841,33 @@ class ChatClient {
 
                     for (const part of msg.content) {
                         if (part.type === 'text') {
-                            const meta = !metadataUsed ? (msg.metadata || null) : null;
+                            const baseMeta = !metadataUsed ? (msg.metadata || null) : null;
+                            const meta = baseMeta
+                                ? Object.assign({}, baseMeta, { messageId: msg._id })
+                                : { messageId: msg._id };
                             metadataUsed = true;
                             this.addMessage(part.text, 'assistant', meta);
                         } else if (part.type === 'tool_use') {
-                            this.addToolUse(part.name, part.input);
+                            this.addToolUse(part.name, part.input, {
+                                messageId: msg._id,
+                                toolCallId: part.id
+                            });
                             const matchingResult = pendingToolResults.get(part.id);
                             if (matchingResult) {
-                                this.addToolResult(matchingResult.content, !!matchingResult.is_error);
+                                this.addToolResult(matchingResult.content, !!matchingResult.is_error, {
+                                    messageId: nextMsg?._id ?? null,
+                                    toolCallId: matchingResult.tool_use_id
+                                });
                                 pendingToolResults.delete(part.id);
                             }
                         }
                     }
 
                     for (const leftoverResult of pendingToolResults.values()) {
-                        this.addToolResult(leftoverResult.content, !!leftoverResult.is_error);
+                        this.addToolResult(leftoverResult.content, !!leftoverResult.is_error, {
+                            messageId: nextMsg?._id ?? null,
+                            toolCallId: leftoverResult.tool_use_id
+                        });
                     }
                 }
             }
@@ -2435,10 +2912,15 @@ class ChatClient {
         }
 
         this.messageInput.value = '';
-        this.addMessage(content, 'user');
-
-        // Add to local messages array for persistence
-        this.messages.push({ role: 'user', content: content });
+        let preAddedMessage = null;
+        if (this.aiManager) {
+            preAddedMessage = this.aiManager.addMessage('user', content);
+            this.syncLocalMessagesFromHistory();
+            this.renderChatHistory();
+        } else {
+            this.addMessage(content, 'user');
+            this.messages.push({ role: 'user', content: content });
+        }
 
         // Prepare loading indicator but append after potential re-render
         const loadingDiv = document.createElement('div');
@@ -2461,7 +2943,8 @@ class ChatClient {
                 temperature: 0.7,
                 maxIterations: this.maxIterations,
                 minimizeTokens: this.minimizeTokens,
-                limitMessages: this.limitMessages > 0 ? this.limitMessages : 0
+                limitMessages: this.limitMessages > 0 ? this.limitMessages : 0,
+                preAddedUserMessage: !!preAddedMessage
             });
 
             if (this.minimizeTokens) {
@@ -2512,14 +2995,18 @@ class ChatClient {
         if (response.allToolCalls && response.allToolCalls.length > 0) {
             for (let i = 0; i < response.allToolCalls.length; i++) {
                 const toolCall = response.allToolCalls[i];
-                const toolResult = response.allToolResults[i];
+                const toolResult = response.allToolResults ? response.allToolResults[i] : null;
 
-                // Display the tool call
-                this.addToolUse(toolCall.name, toolCall.arguments);
+                this.addToolUse(toolCall.name, toolCall.arguments, {
+                    messageId: toolCall.messageId ?? null,
+                    toolCallId: toolCall.id
+                });
 
-                // Display the tool result
                 if (toolResult) {
-                    this.addToolResult(toolResult.result);
+                    this.addToolResult(toolResult.result, !!toolResult.isError, {
+                        messageId: toolResult.messageId ?? null,
+                        toolCallId: toolResult.id ?? toolResult.tool_use_id ?? toolCall.id
+                    });
                 }
             }
         }
@@ -2528,16 +3015,10 @@ class ChatClient {
         if (response.content) {
             const metadata = {
                 provider: this.currentProvider,
-                model: this.modelSelect.value
+                model: this.modelSelect.value,
+                messageId: response.assistantMessageId ?? null
             };
             this.addMessage(response.content, 'assistant', metadata);
-
-            // Add to local messages array with metadata for persistence
-            this.messages.push({
-                role: 'assistant',
-                content: response.content,
-                metadata: metadata
-            });
 
             const history = this.aiManager ? this.aiManager.getHistory() : null;
             if (history && history.length > 0) {
@@ -2561,6 +3042,9 @@ class ChatClient {
         if (response.needsContinuation) {
             this.showContinueToolsButton(response.iterationsUsed, response.maxIterations);
         }
+
+        this.syncLocalMessagesFromHistory();
+        this.renderChatHistory();
 
         // Auto-save after processing response
         if (this.autoSave) {

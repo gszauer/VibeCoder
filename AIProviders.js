@@ -539,6 +539,7 @@ class AIManager {
         this.tools = [];
         this.conversationHistory = [];
         this.systemPrompt = null;
+        this.messageIdCounter = 0;
     }
 
     // Register a provider
@@ -584,6 +585,7 @@ class AIManager {
     // Clear conversation history
     clearHistory() {
         this.conversationHistory = [];
+        this.messageIdCounter = 0;
     }
 
     cloneMessage(message) {
@@ -591,6 +593,40 @@ class AIManager {
             return structuredClone(message);
         }
         return JSON.parse(JSON.stringify(message));
+    }
+
+    ensureMessageId(message) {
+        if (!message || typeof message !== 'object') {
+            return;
+        }
+
+        const existingId = message._id;
+        if (typeof existingId === 'number' && Number.isFinite(existingId)) {
+            if (existingId > this.messageIdCounter) {
+                this.messageIdCounter = existingId;
+            }
+            return;
+        }
+
+        if (typeof existingId === 'string') {
+            const parsed = parseInt(existingId, 10);
+            if (!Number.isNaN(parsed)) {
+                if (parsed > this.messageIdCounter) {
+                    this.messageIdCounter = parsed;
+                }
+                message._id = parsed;
+                return;
+            }
+        }
+
+        this.messageIdCounter += 1;
+        message._id = this.messageIdCounter;
+    }
+
+    ensureHistoryMessageIds() {
+        for (const entry of this.conversationHistory) {
+            this.ensureMessageId(entry);
+        }
     }
 
     findLatestUserTextMessageIndex(messages) {
@@ -639,7 +675,10 @@ class AIManager {
 
     // Add a message to history
     addMessage(role, content) {
-        this.conversationHistory.push({ role, content });
+        const message = { role, content };
+        this.ensureMessageId(message);
+        this.conversationHistory.push(message);
+        return message;
     }
 
     buildToolBatchSummary(toolMetas) {
@@ -769,7 +808,7 @@ class AIManager {
             if (msg.role === 'assistant' && Array.isArray(msg.content)) {
                 for (const part of msg.content) {
                     if (part.type === 'tool_use') {
-                        toolInfo.set(part.id, { name: part.name });
+                        toolInfo.set(part.id, { name: part.name, id: part.id });
                     }
                 }
             } else if (msg.role === 'user' && Array.isArray(msg.content)) {
@@ -779,6 +818,9 @@ class AIManager {
                         entry.isError = part.is_error || false;
                         if (!entry.name && part.name) {
                             entry.name = part.name;
+                        }
+                        if (!entry.id) {
+                            entry.id = part.tool_use_id;
                         }
                         toolInfo.set(part.tool_use_id, entry);
                     }
@@ -810,6 +852,9 @@ class AIManager {
                 transformed.content = [];
                 transformed.hasNonSummaryText = false;
                 transformed.summaryInfo = null;
+                transformed.summaryToolIds = Array.isArray(msg.summaryToolIds)
+                    ? [...msg.summaryToolIds]
+                    : [];
 
                 let pendingToolBatch = [];
 
@@ -830,6 +875,15 @@ class AIManager {
                     transformed.summaryInfo.failureCount += batchInfo.failureCount;
                     transformed.summaryInfo.successNames.push(...batchInfo.successNames);
                     transformed.summaryInfo.failureNames.push(...batchInfo.failureNames);
+                    const batchIds = pendingToolBatch
+                        .map(item => item && item.id)
+                        .filter(Boolean);
+                    if (batchIds.length > 0) {
+                        if (!Array.isArray(transformed.summaryToolIds)) {
+                            transformed.summaryToolIds = [];
+                        }
+                        transformed.summaryToolIds.push(...batchIds);
+                    }
                     pendingToolBatch = [];
                 };
 
@@ -839,7 +893,10 @@ class AIManager {
                         transformed.content.push({ type: 'text', text: part.text });
                         transformed.hasNonSummaryText = true;
                     } else if (part.type === 'tool_use') {
-                        const meta = toolInfo.get(part.id) || { name: part.name, isError: false };
+                        const meta = toolInfo.get(part.id) || { name: part.name, isError: false, id: part.id };
+                        if (!meta.id) {
+                            meta.id = part.id;
+                        }
                         pendingToolBatch.push(meta);
                     }
                 }
@@ -858,6 +915,9 @@ class AIManager {
                             toolSummary: true,
                             summaryInfo: summaryMeta
                         });
+                        if (Array.isArray(transformed.summaryToolIds) && transformed.summaryToolIds.length > 0) {
+                            transformed.metadata.summaryToolIds = [...new Set(transformed.summaryToolIds)];
+                        }
                         const prev = abridged[abridged.length - 1];
                         if (prev && prev.metadata?.toolSummary && prev.hasNonSummaryText === false) {
                             const prevInfo = prev.metadata.summaryInfo;
@@ -878,6 +938,9 @@ class AIManager {
                     transformed.hasNonSummaryText = !!transformed.hasNonSummaryText;
                     if (transformed.metadata?.toolSummary) {
                         transformed.hasNonSummaryText = false;
+                        if (Array.isArray(transformed.summaryToolIds) && transformed.summaryToolIds.length > 0 && !Array.isArray(transformed.metadata.summaryToolIds)) {
+                            transformed.metadata.summaryToolIds = [...new Set(transformed.summaryToolIds)];
+                        }
                     }
                     abridged.push(transformed);
                 }
@@ -905,11 +968,17 @@ class AIManager {
             throw new Error('No AI provider configured');
         }
 
+        this.ensureHistoryMessageIds();
+
         // Check if this is a continuation request
         const isContinuation = userMessage === '__continue_tools__';
 
+        const skipAddingUserMessage = options.preAddedUserMessage === true;
+        const providerOptions = { ...options };
+        delete providerOptions.preAddedUserMessage;
+
         // Only add user message if not a continuation
-        if (!isContinuation) {
+        if (!isContinuation && !skipAddingUserMessage) {
             this.addMessage('user', userMessage);
         }
 
@@ -947,13 +1016,10 @@ class AIManager {
             iterations++;
 
             // Call the AI
-            const response = await provider.callAPI(messages, this.tools, options);
+            const response = await provider.callAPI(messages, this.tools, providerOptions);
 
             // Check if there are tool calls to process
             if (response.toolCalls && response.toolCalls.length > 0) {
-                // Track tool calls for UI display
-                allToolCalls.push(...response.toolCalls);
-
                 // Add assistant message with tool calls to history
                 const assistantMessage = {
                     role: 'assistant',
@@ -976,12 +1042,20 @@ class AIManager {
                     });
                 }
 
+                this.ensureMessageId(assistantMessage);
+                if (!assistantMessage.metadata) {
+                    assistantMessage.metadata = {};
+                }
+                assistantMessage.metadata.toolCallIds = response.toolCalls.map(call => call.id);
                 messages.push(assistantMessage);
                 this.conversationHistory.push(assistantMessage);
 
                 // Execute the tool calls
                 const toolResults = await provider.executeToolCalls(response.toolCalls, this.tools);
-                allToolResults.push(...toolResults);
+                const toolResultsWithMeta = toolResults.map(result => ({
+                    ...result,
+                    messageId: null
+                }));
 
                 // Format tool results for the specific provider
                 const toolResultMessage = {
@@ -994,8 +1068,28 @@ class AIManager {
                     }))
                 };
 
+                this.ensureMessageId(toolResultMessage);
+                if (!toolResultMessage.metadata) {
+                    toolResultMessage.metadata = {};
+                }
+                toolResultMessage.metadata.toolCallIds = toolResults.map(result => result.id);
                 messages.push(toolResultMessage);
                 this.conversationHistory.push(toolResultMessage);
+
+                // Track tool calls/results with message metadata for UI
+                const toolCallsWithMeta = response.toolCalls.map(call => ({
+                    ...call,
+                    messageId: assistantMessage._id
+                }));
+                allToolCalls.push(...toolCallsWithMeta);
+
+                for (let i = 0; i < toolResultsWithMeta.length; i++) {
+                    toolResultsWithMeta[i].messageId = toolResultMessage._id;
+                }
+                allToolResults.push(...toolResultsWithMeta);
+
+                response.assistantMessageId = assistantMessage._id;
+                response.toolResultMessageId = toolResultMessage._id;
 
                 // Continue to get the next response
                 finalResponse = response;
@@ -1010,7 +1104,9 @@ class AIManager {
                         role: 'assistant',
                         content: response.content
                     };
+                    this.ensureMessageId(assistantMessage);
                     this.conversationHistory.push(assistantMessage);
+                    response.assistantMessageId = assistantMessage._id;
                 }
             }
         }
@@ -1061,7 +1157,7 @@ class AIManager {
     }
 }
 
-AIManager.logAugmentedPrompts = true;
+AIManager.logAugmentedPrompts = false;
 
 // Ollama Provider (Dynamic local models)
 class OllamaProvider extends AIProvider {

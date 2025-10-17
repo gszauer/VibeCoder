@@ -12,7 +12,7 @@
         <div class="file-browser">
             <div class="file-tree" id="fileTree"></div>
             <div class="file-section collapsed" id="fileSection">
-                <div class="file-toggle" onclick="toggleFileSection()">
+                <div class="file-toggle" id="fileToggle">
                     <div class="file-status">
                         <span class="file-indicator" id="fileIndicator"></span>
                         <span>File Browser Settings</span>
@@ -59,61 +59,62 @@
                             <button class="btn btn-primary" id="sendBtn" onclick="sendMessage()">Send</button>
                         </div>
                         <div class="api-section collapsed" id="apiSection">
-                <div class="api-toggle" onclick="toggleApiSection()">
-                    <div class="api-status">
-                        <span class="api-indicator" id="apiIndicator"></span>
-                        <span id="apiStatusText">API Settings</span>
-                        <span id="modelDisplay" style="color: #007acc; margin-left: 10px;"></span>
-                        <span id="tokenDisplay" style="color: #b8960f; margin-left: 10px;"></span>
-                    </div>
-                    <span class="api-toggle-icon">▲</span>
-                </div>
-                <div class="api-controls">
-                    <select id="providerSelect" style="padding: 8px; background-color: #2a2a2a; border: 1px solid #3a3a3a; color: #e0e0e0; border-radius: 4px; width: 100px;">
-                        <option value="claude">Claude</option>
-                        <option value="openai">OpenAI</option>
-                        <option value="gemini">Gemini</option>
-                        <option value="ollama">Ollama</option>
-                    </select>
-                    <select id="modelSelect" style="padding: 8px; background-color: #2a2a2a; border: 1px solid #3a3a3a; color: #e0e0e0; border-radius: 4px; width: 130px;">
-                        <!-- Will be populated based on provider -->
-                    </select>
-                    <input type="password" id="apiKey" placeholder="Enter API Key (auto-saves)" style="flex: 1;">
-                </div>
-                <div class="chat-controls">
-                    <div class="chat-buttons" style="width: 100%; display: flex; justify-content: space-between;">
-                        <div style="display: flex; gap: 10px;">
-                            <button class="btn" id="systemPromptBtn" onclick="window.chat.openSystemPromptEditor()">System Prompt</button>
-                            <button class="btn" id="toolsPromptBtn" onclick="window.chat.openToolsViewer()">Tools</button>
-                            <button class="btn" id="envPromptBtn" onclick="window.chat.openEnvironmentEditor()">Environment</button>
+                            <div class="api-toggle" id="apiToggle">
+                                <div class="api-status">
+                                    <span class="api-indicator" id="apiIndicator"></span>
+                                    <span id="apiStatusText">API Settings</span>
+                                    <span id="modelDisplay" style="color: #007acc; margin-left: 10px;"></span>
+                                    <span id="tokenDisplay" style="color: #b8960f; margin-left: 10px;"></span>
+                                </div>
+                                <span class="api-toggle-icon">▲</span>
+                            </div>
+                            <div class="api-controls">
+                                <select id="providerSelect" style="padding: 8px; background-color: #2a2a2a; border: 1px solid #3a3a3a; color: #e0e0e0; border-radius: 4px; width: 100px;">
+                                    <option value="claude">Claude</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="gemini">Gemini</option>
+                                    <option value="ollama">Ollama</option>
+                                </select>
+                                <select id="modelSelect" style="padding: 8px; background-color: #2a2a2a; border: 1px solid #3a3a3a; color: #e0e0e0; border-radius: 4px; width: 130px;">
+                                    <!-- Will be populated based on provider -->
+                                </select>
+                                <input type="password" id="apiKey" placeholder="Enter API Key (auto-saves)" style="flex: 1;">
+                            </div>
+                            <div class="chat-controls">
+                                <div class="chat-buttons" style="width: 100%; display: flex; justify-content: space-between;">
+                                    <div style="display: flex; gap: 10px;">
+                                        <button class="btn" id="systemPromptBtn" onclick="window.chat.openSystemPromptEditor()">System Prompt</button>
+                                        <button class="btn" id="toolsPromptBtn" onclick="window.chat.openToolsViewer()">Tools</button>
+                                        <button class="btn" id="envPromptBtn" onclick="window.chat.openEnvironmentEditor()">Environment</button>
+                                    </div>
+                                    <div style="display: flex; gap: 10px; align-items: center; flex: 1; justify-content: center;">
+                                        <label class="chat-control-label chat-control-number">
+                                            <span class="chat-control-text">Tool Iterations</span>
+                                            <input type="number" id="maxIterations" min="1" max="50" value="10"
+                                                   class="chat-control-input"
+                                                   onchange="window.chat && window.chat.updateMaxIterations(this.value)"
+                                                   title="Maximum tool call iterations before pausing">
+                                        </label>
+                                        <label class="chat-control-label chat-control-toggle">
+                                            <input type="checkbox" id="minimizeTokensToggle" class="chat-toggle-input" checked>
+                                            <span class="chat-toggle-indicator" aria-hidden="true"></span>
+                                            <span class="chat-control-text">Summarize Tools</span>
+                                        </label>
+                                        <label id="limitMessagesContainer" class="chat-control-label chat-control-number">
+                                            <span class="chat-control-text">Limit Messages</span>
+                                            <input type="number" id="limitMessagesInput" min="0" value="5"
+                                                   class="chat-control-input"
+                                                   title="Only send the last N user messages">
+                                        </label>
+                                    </div>
+                                    <div style="display: flex; gap: 10px; align-items: center;">
+                                        <button class="btn" id="exportChatBtn" onclick="window.chat.exportChatHistory()">Export Chat</button>
+                                        <button class="btn" id="importChatBtn" onclick="document.getElementById('chatHistoryInput').click()">Import Chat</button>
+                                        <button class="btn btn-danger" id="clearChatBtn" onclick="if(confirm('Clear all messages?')) window.chat.clearChat()">Clear Chat</button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                        <div style="display: flex; gap: 10px; align-items: center; flex: 1; justify-content: center;">
-                            <label class="chat-control-label chat-control-number">
-                                <span class="chat-control-text">Tool Iterations</span>
-                                <input type="number" id="maxIterations" min="1" max="50" value="10"
-                                       class="chat-control-input"
-                                       onchange="window.chat && window.chat.updateMaxIterations(this.value)"
-                                       title="Maximum tool call iterations before pausing">
-                            </label>
-                            <label class="chat-control-label chat-control-toggle">
-                                <input type="checkbox" id="minimizeTokensToggle" class="chat-toggle-input" checked>
-                                <span class="chat-toggle-indicator" aria-hidden="true"></span>
-                                <span class="chat-control-text">Summarize Tools</span>
-                            </label>
-                            <label id="limitMessagesContainer" class="chat-control-label chat-control-number">
-                                <span class="chat-control-text">Limit Messages</span>
-                                <input type="number" id="limitMessagesInput" min="0" value="5"
-                                       class="chat-control-input"
-                                       title="Only send the last N user messages">
-                            </label>
-                        </div>
-                        <div style="display: flex; gap: 10px; align-items: center;">
-                            <button class="btn" id="exportChatBtn" onclick="window.chat.exportChatHistory()">Export Chat</button>
-                            <button class="btn" id="importChatBtn" onclick="document.getElementById('chatHistoryInput').click()">Import Chat</button>
-                            <button class="btn btn-danger" id="clearChatBtn" onclick="if(confirm('Clear all messages?')) window.chat.clearChat()">Clear Chat</button>
-                        </div>
-                    </div>
-                </div>
             </div>
                     </div>
                 </div>
@@ -136,7 +137,8 @@
             <div class="modal-body">
                 <textarea id="infoViewerContent" readonly placeholder="Loading..."></textarea>
             </div>
-            <div class="modal-footer">
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+                <a href="code_summary.html" target="_blank" style="color: #9e9e9e; text-decoration: underline; font-size: 13px;">Test Code Summary Tool</a>
                 <button class="btn" onclick="window.chat.copyInfoContent(event)">Copy</button>
             </div>
         </div>
@@ -212,6 +214,20 @@
         <div class="context-menu-item" data-action="rename">Rename</div>
         <div class="context-menu-item" data-action="delete">Delete</div>
         <div class="context-menu-item" data-action="download">Download</div>
+    </div>
+
+    <div id="chatContextMenu" class="context-menu">
+        <div class="context-menu-item" data-action="copy">Copy</div>
+        <div class="context-menu-item" data-action="edit">Edit</div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" data-action="remove">Remove</div>
+    </div>
+
+    <div id="chatBackgroundContextMenu" class="context-menu">
+        <div class="context-menu-item" data-action="export">Export Chat</div>
+        <div class="context-menu-item" data-action="import">Import Chat</div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" data-action="clear">Clear Chat</div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
