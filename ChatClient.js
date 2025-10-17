@@ -24,10 +24,9 @@ class ChatClient {
         // Auto-save chat after each response
         this.autoSave = true;
 
-        // System prompt (stored in memory only) - with default
-        this.systemPrompt = `You are an AI assistant helping with a coding workbench.
-You have access to file system tools and can help with programming tasks.
-Be concise, accurate, and helpful.`;
+        // System prompt handling
+        this.promptFilePath = '/prompt.txt';
+        this.systemPrompt = this.getDefaultSystemPrompt();
 
         // Environment info - load from localStorage or use empty default
         this.environmentInfo = localStorage.getItem('environment_info') || '';
@@ -69,6 +68,9 @@ Be concise, accurate, and helpful.`;
         }
         this.initializationPending = false;
 
+        // Load system prompt before providers initialize
+        await this.loadSystemPromptFromFile();
+
         // First load model config
         await this.loadModelConfig();
 
@@ -79,6 +81,77 @@ Be concise, accurate, and helpful.`;
         const maxIterInput = document.getElementById('maxIterations');
         if (maxIterInput) {
             maxIterInput.value = this.maxIterations;
+        }
+    }
+
+    getDefaultSystemPrompt() {
+        return [
+            'You are VibeCoder, an AI coding teammate dedicated to building and refining Phaser.js games inside the VibeCoder web workbench.',
+            '',
+            'Capabilities & tools:',
+            '- Interact with the project exclusively through the provided tools. Key ones include `list_files`, `read_file`, `write_file`, `create_file`, `delete_file`, `rename_file`, `create_folder`, `delete_folder`, `move_file`, `code_summary`, `list_html_files`, `html_get_scripts`, `html_add_script`, `html_remove_script`, `html_get_inline`, `html_set_inline`, `js_create_class`, `js_get_constructor`, `js_set_constructor`, `js_create_variable`, `js_remove_variable`, `js_get_variable`, `js_create_function`, `js_remove_function`, `js_get_function`, `js_update_function`, `js_get_class_info`, `js_get_class_list`, `js_list_classes`, `js_rename_function`, `js_rename_variable`, and `js_rename_class`.',
+            '- Prefer the JavaScript-specific tools for manipulating classes, constructors, members, and methods. Only fall back to `write_file` for non-class files or when no specialized tool fits.',
+            '- Remember all paths are rooted (prefix with `/`). Only access or modify files via tool calls; never assume direct filesystem access.',
+            '',
+            'Workflow expectations:',
+            '1. Clarify goals when needed; ask the user before guessing.',
+            '2. Inspect the current code before editing (e.g., `code_summary`, `js_get_class_info`, `read_file`).',
+            '3. Plan multi-step changes, narrate that plan briefly, execute it with the right tools, and update or explain after each step.',
+            '4. Keep tool arguments concise and valid; avoid embedding large code bodies unless the tool expects them.',
+            '5. When creating new scripts, offer to link them into the relevant HTML via `html_add_script` or update inline logic with `html_set_inline`.',
+            '6. Maintain Phaser best practices: scene lifecycle (`preload`, `create`, `update`), asset key consistency, physics configs, input handling, and modular scene structure. If assets or configuration files must change, do so explicitly with the appropriate tools.',
+            '7. Guard against regressions—when updating methods, check for related code (e.g., other scenes, globals, asset loads) and adjust if necessary.',
+            '',
+            'Response style:',
+            '- Keep replies concise, friendly, and focused on Phaser development.',
+            '- When changes are made, reference the affected files with clickable `path:line` notation and describe the impact.',
+            '- Offer logical next steps (tests to run, game preview instructions) when relevant.',
+            '- If you can\'t complete an action, explain why and suggest alternatives.',
+            '',
+            'Default to Phaser 3 idioms, provide practical game-development advice, and ensure every modification flows through the abstract editor tools.'
+        ].join('\n');
+    }
+
+    async loadSystemPromptFromFile() {
+        if (!this.tools || !this.tools.fileSystem) {
+            this.systemPrompt = this.getDefaultSystemPrompt();
+            return;
+        }
+
+        try {
+            const content = await this.tools.read_file(this.promptFilePath);
+            const trimmed = content.trim();
+            if (trimmed) {
+                this.systemPrompt = trimmed;
+            } else {
+                this.systemPrompt = this.getDefaultSystemPrompt();
+                await this.persistSystemPrompt();
+            }
+        } catch (error) {
+            console.warn(`Failed to load ${this.promptFilePath}:`, error.message);
+            this.systemPrompt = this.getDefaultSystemPrompt();
+            await this.persistSystemPrompt();
+        }
+
+        if (this.aiManager) {
+            this.aiManager.setSystemPrompt(this.systemPrompt);
+        }
+    }
+
+    async persistSystemPrompt() {
+        if (!this.tools || !this.tools.fileSystem) {
+            return;
+        }
+
+        try {
+            const existingFile = await this.tools.fileSystem.getFile(this.promptFilePath);
+            if (existingFile) {
+                await this.tools.write_file(this.promptFilePath, this.systemPrompt);
+            } else {
+                await this.tools.create_file(this.promptFilePath, this.systemPrompt);
+            }
+        } catch (error) {
+            console.error(`Failed to persist ${this.promptFilePath}:`, error.message);
         }
     }
 
@@ -578,7 +651,7 @@ Be concise, accurate, and helpful.`;
         }
     }
 
-    saveSystemPrompt() {
+    async saveSystemPrompt() {
         const editor = document.getElementById('systemPromptEditor');
         if (editor) {
             // Save in memory only
@@ -589,11 +662,13 @@ Be concise, accurate, and helpful.`;
                 this.aiManager.setSystemPrompt(this.systemPrompt);
             }
 
+            await this.persistSystemPrompt();
+
             // Close the modal
             this.closeSystemPromptEditor();
 
             // Optional: Show a subtle confirmation
-            console.log('System prompt updated (in memory only)');
+            console.log(`System prompt updated and saved to ${this.promptFilePath}`);
         }
     }
 
