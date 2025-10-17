@@ -156,7 +156,24 @@ class ClaudeProvider extends AIProvider {
 
         if (!response.ok) {
             const error = await response.text();
+            if (console && typeof console.debug === 'function') {
+                console.debug('[RateLimit] Claude error headers', {
+                    limit: response.headers.get('anthropic-ratelimit-inputs-limit'),
+                    remaining: response.headers.get('anthropic-ratelimit-inputs-remaining'),
+                    reset: response.headers.get('anthropic-ratelimit-inputs-reset'),
+                    requestId: response.headers.get('x-request-id')
+                });
+            }
             throw new Error(`Claude API Error: ${error}`);
+        }
+
+        if (console && typeof console.debug === 'function') {
+            console.debug('[RateLimit] Claude success headers', {
+                limit: response.headers.get('anthropic-ratelimit-inputs-limit'),
+                remaining: response.headers.get('anthropic-ratelimit-inputs-remaining'),
+                reset: response.headers.get('anthropic-ratelimit-inputs-reset'),
+                requestId: response.headers.get('x-request-id')
+            });
         }
 
         const data = await response.json();
@@ -975,9 +992,11 @@ class AIManager {
 
         const skipAddingUserMessage = options.preAddedUserMessage === true;
         const progressCallback = typeof options.onProgress === 'function' ? options.onProgress : null;
+        const prepareRateLimit = typeof options.prepareRateLimit === 'function' ? options.prepareRateLimit : null;
         const providerOptions = { ...options };
         delete providerOptions.preAddedUserMessage;
         delete providerOptions.onProgress;
+        delete providerOptions.prepareRateLimit;
 
         // Only add user message if not a continuation
         if (!isContinuation && !skipAddingUserMessage) {
@@ -1016,6 +1035,14 @@ class AIManager {
 
         while (continueProcessing && iterations < MAX_ITERATIONS) {
             iterations++;
+
+            if (prepareRateLimit) {
+                try {
+                    await prepareRateLimit(messages);
+                } catch (rateError) {
+                    console.warn('Rate limit preparation failed:', rateError);
+                }
+            }
 
             // Call the AI
             const response = await provider.callAPI(messages, this.tools, providerOptions);
@@ -1099,7 +1126,8 @@ class AIManager {
                         assistantMessage,
                         toolResultMessage,
                         allToolCalls: toolCallsWithMeta,
-                        allToolResults: toolResultsWithMeta
+                        allToolResults: toolResultsWithMeta,
+                        usage: response.usage || null
                     });
                 }
 
@@ -1122,7 +1150,8 @@ class AIManager {
                     if (progressCallback) {
                         progressCallback({
                             type: 'final_assistant_message',
-                            assistantMessage
+                            assistantMessage,
+                            usage: response.usage || null
                         });
                     }
                 }

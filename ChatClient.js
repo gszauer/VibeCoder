@@ -84,6 +84,7 @@ class ChatClient {
         this.recentTokenUsage = [];
         this.rateLimitNoticeElement = null;
         this.rateLimitNoticeInterval = null;
+        this.pendingProviderUsageEntries = [];
 
         this.messageContextData = new WeakMap();
         this.activeContextMessage = null;
@@ -2174,13 +2175,22 @@ class ChatClient {
         return this.recentTokenUsage.reduce((sum, entry) => sum + entry.tokens, 0);
     }
 
-    addTokenUsage(tokens, provisional = false) {
+    addTokenUsage(tokens, provisional = false, meta = {}) {
         const entry = {
             timestamp: Date.now(),
             tokens,
-            provisional
+            provisional,
+            meta: Object.assign({}, meta)
         };
         this.recentTokenUsage.push(entry);
+        if (console && typeof console.debug === 'function') {
+            console.debug('[RateLimit] addTokenUsage', {
+                tokens,
+                provisional,
+                meta: entry.meta,
+                totalUsedLastMinute: this.getTokensUsedLastMinute()
+            });
+        }
         return entry;
     }
 
@@ -2188,9 +2198,20 @@ class ChatClient {
         if (!entry) {
             return;
         }
+        const previousTokens = entry.tokens;
         entry.tokens = actualTokens;
         entry.provisional = false;
         entry.timestamp = Date.now();
+        entry.meta = Object.assign({}, entry.meta, { actualTokens });
+        if (console && typeof console.debug === 'function') {
+            console.debug('[RateLimit] finalizeTokenUsage', {
+                estimatedTokens: entry.meta?.estimated,
+                previousTokens,
+                actualTokens,
+                difference: actualTokens - (entry.meta?.estimated ?? previousTokens),
+                meta: entry.meta
+            });
+        }
         this.pruneTokenUsage();
     }
 
@@ -2201,6 +2222,9 @@ class ChatClient {
         const idx = this.recentTokenUsage.indexOf(entry);
         if (idx !== -1) {
             this.recentTokenUsage.splice(idx, 1);
+            if (console && typeof console.debug === 'function') {
+                console.debug('[RateLimit] removeTokenUsage', entry);
+            }
         }
     }
 
@@ -2227,9 +2251,15 @@ class ChatClient {
         if (!this.rateLimitNoticeElement) {
             const containerDiv = document.createElement('div');
             containerDiv.className = 'message-container assistant';
+            containerDiv.style.justifyContent = 'center';
 
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message assistant';
+            messageDiv.style.backgroundColor = '#0d3f6b';
+            messageDiv.style.color = '#e6f2ff';
+            messageDiv.style.textAlign = 'center';
+            messageDiv.style.maxWidth = '60%';
+            messageDiv.style.border = '1px solid #1e5fa8';
             containerDiv.appendChild(messageDiv);
 
             this.rateLimitNoticeElement = { container: containerDiv, message: messageDiv };
@@ -2273,20 +2303,42 @@ class ChatClient {
         }
 
         this.hideRateLimitNotice();
+        if (console && typeof console.debug === 'function') {
+            console.debug('[RateLimit] waitForRateLimit start', {
+                tokensNeeded,
+                tokensUsedLastMinute: this.getTokensUsedLastMinute(),
+                limit: this.tokensPerMinuteLimit
+            });
+        }
 
         const attemptSend = (resolve) => {
             this.pruneTokenUsage();
             const used = this.getTokensUsedLastMinute();
             if (used + tokensNeeded <= this.tokensPerMinuteLimit) {
                 this.hideRateLimitNotice();
+                if (console && typeof console.debug === 'function') {
+                    console.debug('[RateLimit] waitForRateLimit satisfied', {
+                        tokensNeeded,
+                        tokensUsedLastMinute: used,
+                        limit: this.tokensPerMinuteLimit
+                    });
+                }
                 resolve();
                 return;
             }
 
-            const waitMs = this.getTimeUntilRateLimitClear(tokensNeeded);
-            this.showRateLimitNotice(waitMs || 1000);
+            const waitMs = this.getTimeUntilRateLimitClear(tokensNeeded) || 1000;
+            this.showRateLimitNotice(waitMs);
+            if (console && typeof console.debug === 'function') {
+                console.debug('[RateLimit] waitForRateLimit waiting', {
+                    tokensNeeded,
+                    tokensUsedLastMinute: used,
+                    limit: this.tokensPerMinuteLimit,
+                    waitMs
+                });
+            }
 
-            setTimeout(() => attemptSend(resolve), Math.max(500, waitMs || 1000));
+            setTimeout(() => attemptSend(resolve), Math.max(500, waitMs));
         };
 
         return new Promise((resolve) => {
@@ -3075,10 +3127,8 @@ class ChatClient {
         }
 
         this.messageInput.value = '';
+        this.pendingProviderUsageEntries = [];
         let preAddedMessage = null;
-        const estimatedTokens = this.estimateTokensForText(content);
-        await this.waitForRateLimit(estimatedTokens);
-        const provisionalUsage = this.tokensPerMinuteLimit > 0 ? this.addTokenUsage(estimatedTokens, true) : null;
 
         if (this.aiManager) {
             preAddedMessage = this.aiManager.addMessage('user', content);
@@ -3104,7 +3154,10 @@ class ChatClient {
                 currentProviderName: this.aiManager.currentProvider
             });
 
-            const handleProgress = () => {
+            const handleProgress = (info) => {
+                if (console && typeof console.debug === 'function') {
+                    console.debug('[RateLimit] progress update', info);
+                }
                 if (this.chatWindow && this.loadingIndicator === loadingDiv && this.chatWindow.contains(loadingDiv)) {
                     this.chatWindow.removeChild(loadingDiv);
                     this.loadingIndicator = null;
@@ -3112,6 +3165,40 @@ class ChatClient {
                 if (this.aiManager) {
                     this.syncLocalMessagesFromHistory();
                     this.renderChatHistory();
+                }
+                if (info && info.usage && this.pendingProviderUsageEntries.length > 0) {
+                    const entry = this.pendingProviderUsageEntries.shift();
+                    const inputTokens = info.usage.input_tokens || info.usage.prompt_tokens || entry.tokens;
+                    this.finalizeTokenUsage(entry, inputTokens);
+                }
+            };
+
+            const prepareRateLimit = async (historyMessages) => {
+                try {
+                    const serialized = JSON.stringify(historyMessages);
+                    const estimated = this.estimateTokensForText(serialized);
+                    if (console && typeof console.debug === 'function') {
+                        console.debug('[RateLimit] provider payload estimate', {
+                            providerside: true,
+                            estimatedTokens: estimated,
+                            messageCount: historyMessages.length,
+                            tokensUsedLastMinute: this.getTokensUsedLastMinute(),
+                            limit: this.tokensPerMinuteLimit
+                        });
+                    }
+
+                    await this.waitForRateLimit(estimated);
+
+                    if (this.tokensPerMinuteLimit > 0) {
+                        const entry = this.addTokenUsage(estimated, true, {
+                            type: 'provider_payload',
+                            estimated,
+                            messageCount: historyMessages.length
+                        });
+                        this.pendingProviderUsageEntries.push(entry);
+                    }
+                } catch (error) {
+                    console.warn('Failed to prepare rate limit for payload:', error);
                 }
             };
 
@@ -3123,7 +3210,8 @@ class ChatClient {
                 minimizeTokens: this.minimizeTokens,
                 limitMessages: this.limitMessages > 0 ? this.limitMessages : 0,
                 preAddedUserMessage: !!preAddedMessage,
-                onProgress: handleProgress
+                onProgress: handleProgress,
+                prepareRateLimit
             });
 
             if (this.minimizeTokens) {
@@ -3132,6 +3220,10 @@ class ChatClient {
 
             this.loadingIndicator = loadingDiv;
             this.chatWindow.appendChild(loadingDiv);
+            const sendButton = document.getElementById('sendBtn');
+            if (sendButton) {
+                sendButton.disabled = true;
+            }
 
             const response = await sendPromise;
 
@@ -3140,12 +3232,15 @@ class ChatClient {
             }
             this.loadingIndicator = null;
 
-            await this.processUnifiedResponse(response, provisionalUsage);
+            await this.processUnifiedResponse(response);
 
             this.hideRateLimitNotice();
 
             if (this.minimizeTokens) {
                 this.renderChatHistory();
+            }
+            if (sendButton) {
+                sendButton.disabled = false;
             }
         } catch (error) {
             if (this.chatWindow.contains(loadingDiv)) {
@@ -3161,9 +3256,14 @@ class ChatClient {
                 this.addSystemMessage(errorText);
             }
             console.error(`Error calling ${this.currentProvider}:`, error);
-            if (provisionalUsage) {
-                this.removeTokenUsage(provisionalUsage);
+            if (sendButton) {
+                sendButton.disabled = false;
             }
+            while (this.pendingProviderUsageEntries.length > 0) {
+                const entry = this.pendingProviderUsageEntries.shift();
+                this.removeTokenUsage(entry);
+            }
+            this.pendingProviderUsageEntries = [];
             this.hideRateLimitNotice();
             if (this.autoSave) {
                 try {
@@ -3176,8 +3276,12 @@ class ChatClient {
     }
 
     // New unified response processor
-    async processUnifiedResponse(response, provisionalUsage = null) {
+    async processUnifiedResponse(response) {
         // Update token usage if available
+        const providerEntry = this.pendingProviderUsageEntries.length > 0
+            ? this.pendingProviderUsageEntries.shift()
+            : null;
+
         if (response.usage) {
             // Handle different token field names (Claude uses input_tokens, OpenAI uses prompt_tokens)
             const inputTokens = response.usage.input_tokens || response.usage.prompt_tokens || 0;
@@ -3189,15 +3293,25 @@ class ChatClient {
 
             this.updateTokenDisplay();
 
-            if (inputTokens > 0 && this.tokensPerMinuteLimit > 0) {
-                if (provisionalUsage) {
-                    this.finalizeTokenUsage(provisionalUsage, inputTokens);
-                } else {
-                    this.addTokenUsage(inputTokens, false);
-                }
+            if (this.tokensPerMinuteLimit > 0 && providerEntry) {
+                this.finalizeTokenUsage(providerEntry, inputTokens > 0 ? inputTokens : providerEntry.tokens);
             }
-        } else if (provisionalUsage && this.tokensPerMinuteLimit > 0) {
-            this.finalizeTokenUsage(provisionalUsage, provisionalUsage.tokens);
+            if (console && typeof console.debug === 'function') {
+                console.debug('[RateLimit] response usage', {
+                    inputTokens,
+                    outputTokens,
+                    tokensUsedLastMinute: this.getTokensUsedLastMinute(),
+                    limit: this.tokensPerMinuteLimit
+                });
+            }
+        } else if (providerEntry && this.tokensPerMinuteLimit > 0) {
+            if (console && typeof console.debug === 'function') {
+                console.debug('[RateLimit] response missing usage data, using estimate', {
+                    estimatedTokens: providerEntry.tokens,
+                    meta: providerEntry.meta
+                });
+            }
+            this.finalizeTokenUsage(providerEntry, providerEntry.tokens);
         }
 
         // Display tool calls if any were made
@@ -3217,6 +3331,13 @@ class ChatClient {
                         toolCallId: toolResult.id ?? toolResult.tool_use_id ?? toolCall.id
                     });
                 }
+            }
+        }
+
+        while (this.pendingProviderUsageEntries.length > 0) {
+            const leftover = this.pendingProviderUsageEntries.shift();
+            if (leftover && leftover.provisional) {
+                this.finalizeTokenUsage(leftover, leftover.tokens);
             }
         }
 
