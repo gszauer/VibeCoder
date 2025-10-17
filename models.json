@@ -8,30 +8,18 @@
           "id": "claude-3-5-haiku-latest",
           "name": "Haiku 3.5",
           "displayName": "Claude Haiku 3.5",
-          "pricing": {
-            "input": 0.80,
-            "output": 4.00
-          },
           "contextWindow": 200000
         },
         {
           "id": "claude-3-7-sonnet-latest",
           "name": "Sonnet 3.7",
           "displayName": "Claude Sonnet 3.7",
-          "pricing": {
-            "input": 2.50,
-            "output": 12.00
-          },
           "contextWindow": 200000
         },
         {
           "id": "claude-opus-4-0",
           "name": "Opus 4.0",
           "displayName": "Claude Opus 4.0",
-          "pricing": {
-            "input": 15.00,
-            "output": 75.00
-          },
           "contextWindow": 200000
         }
       ],
@@ -51,20 +39,12 @@
           "name": "GPT-3.5 Turbo",
           "displayName": "GPT-3.5 Turbo",
           "default": true,
-          "pricing": {
-            "input": 0.50,
-            "output": 1.50
-          },
           "contextWindow": 16385
         },
         {
           "id": "gpt-4o",
           "name": "GPT-4o",
           "displayName": "GPT-4o",
-          "pricing": {
-            "input": 2.50,
-            "output": 10.00
-          },
           "contextWindow": 128000
         }
       ],
@@ -80,20 +60,12 @@
           "name": "Gemini 2.5 Flash",
           "displayName": "Gemini 2.5 Flash",
           "default": true,
-          "pricing": {
-            "input": 0.075,
-            "output": 0.30
-          },
           "contextWindow": 1048576
         },
         {
           "id": "gemini-2.5-pro",
           "name": "Gemini 2.5 Pro",
           "displayName": "Gemini 2.5 Pro",
-          "pricing": {
-            "input": 7.00,
-            "output": 21.00
-          },
           "contextWindow": 2097152
         }
       ],

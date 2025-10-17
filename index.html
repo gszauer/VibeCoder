@@ -65,7 +65,6 @@
                         <span id="apiStatusText">API Settings</span>
                         <span id="modelDisplay" style="color: #007acc; margin-left: 10px;"></span>
                         <span id="tokenDisplay" style="color: #b8960f; margin-left: 10px;"></span>
-                        <span id="costDisplay" style="color: #4a7c4e; margin-left: 10px;"></span>
                     </div>
                     <span class="api-toggle-icon">▲</span>
                 </div>
@@ -88,7 +87,7 @@
                             <button class="btn" id="toolsPromptBtn" onclick="window.chat.openToolsViewer()">Tools</button>
                             <button class="btn" id="envPromptBtn" onclick="window.chat.openEnvironmentEditor()">Environment</button>
                         </div>
-                        <div style="display: flex; gap: 10px; align-items: center;">
+                        <div style="display: flex; gap: 10px; align-items: center; flex: 1; justify-content: center;">
                             <label class="chat-control-label chat-control-number">
                                 <span class="chat-control-text">Tool Iterations</span>
                                 <input type="number" id="maxIterations" min="1" max="50" value="10"
@@ -99,8 +98,16 @@
                             <label class="chat-control-label chat-control-toggle">
                                 <input type="checkbox" id="minimizeTokensToggle" class="chat-toggle-input" checked>
                                 <span class="chat-toggle-indicator" aria-hidden="true"></span>
-                                <span class="chat-control-text">Minimize Tokens</span>
+                                <span class="chat-control-text">Summarize Tools</span>
                             </label>
+                            <label id="limitMessagesContainer" class="chat-control-label chat-control-number">
+                                <span class="chat-control-text">Limit Messages</span>
+                                <input type="number" id="limitMessagesInput" min="0" value="5"
+                                       class="chat-control-input"
+                                       title="Only send the last N user messages">
+                            </label>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
                             <button class="btn" id="exportChatBtn" onclick="window.chat.exportChatHistory()">Export Chat</button>
                             <button class="btn" id="importChatBtn" onclick="document.getElementById('chatHistoryInput').click()">Import Chat</button>
                             <button class="btn btn-danger" id="clearChatBtn" onclick="if(confirm('Clear all messages?')) window.chat.clearChat()">Clear Chat</button>
@@ -158,9 +165,14 @@
             <div class="modal-body">
                 <textarea id="systemPromptEditor" placeholder="Enter system prompt to set the AI's behavior and context..."></textarea>
             </div>
-            <div class="modal-footer">
-                <button class="btn btn-primary" onclick="window.chat.saveSystemPrompt()">Save</button>
-                <button class="btn" onclick="window.chat.closeSystemPromptEditor()">Cancel</button>
+            <div class="modal-footer" style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; align-items: center;">
+                <div style="flex: 1; display: flex; justify-content: flex-start;">
+                    <button class="btn btn-secondary" onclick="window.chat.resetSystemPrompt()">Reset to Default</button>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button class="btn btn-primary" onclick="window.chat.saveSystemPrompt()">Save</button>
+                    <button class="btn" onclick="window.chat.closeSystemPromptEditor()">Cancel</button>
+                </div>
             </div>
         </div>
     </div>

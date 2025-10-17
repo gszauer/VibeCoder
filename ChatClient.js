@@ -11,11 +11,9 @@ class ChatClient {
         this.modelSelect = document.getElementById('modelSelect');
         this.providerSelect = document.getElementById('providerSelect');
         this.totalTokens = 0;
-        this.totalCost = 0;
 
         // Model configuration will be loaded from models.json
         this.modelConfig = null;
-        this.modelPricing = {};
         this.modelNames = {};
 
         // Track current context usage (resets per conversation)
@@ -54,12 +52,30 @@ class ChatClient {
             this.minimizeTokensToggle.checked = this.minimizeTokens;
         }
 
+        const storedLimitMessages = localStorage.getItem('limit_messages');
+        let parsedLimit = storedLimitMessages !== null ? parseInt(storedLimitMessages, 10) : NaN;
+        if (Number.isNaN(parsedLimit) || parsedLimit < 0) {
+            parsedLimit = 5;
+        }
+        this.limitMessages = parsedLimit;
+        if (storedLimitMessages === null) {
+            localStorage.setItem('limit_messages', String(this.limitMessages));
+        }
+
+        this.limitMessagesContainer = document.getElementById('limitMessagesContainer');
+        this.limitMessagesInput = document.getElementById('limitMessagesInput');
+        if (this.limitMessagesInput) {
+            this.limitMessagesInput.value = String(this.limitMessages);
+        }
+
         this.loadingIndicator = null;
         this.pendingContinueButton = null;
         this.currentContinueButton = null;
 
         // Setup will complete after model config loads
         this.setupEventListeners();
+
+        this.updateLimitMessagesVisibility();
 
         // Mark that initialization is needed
         this.initializationPending = true;
@@ -128,15 +144,15 @@ class ChatClient {
             const response = await fetch('models.json');
             this.modelConfig = await response.json();
 
-            // Build pricing and display name maps from loaded config
-            for (const [providerId, provider] of Object.entries(this.modelConfig.providers)) {
+            // Build display name and context window maps from loaded config
+            this.modelNames = {};
+            this.modelContextWindows = {};
+            for (const provider of Object.values(this.modelConfig.providers)) {
                 for (const model of provider.models) {
-                    this.modelPricing[model.id] = {
-                        input: model.pricing.input,
-                        output: model.pricing.output,
-                        contextWindow: model.contextWindow
-                    };
                     this.modelNames[model.id] = model.name;
+                    if (typeof model.contextWindow === 'number') {
+                        this.modelContextWindows[model.id] = model.contextWindow;
+                    }
                 }
             }
 
@@ -250,10 +266,10 @@ class ChatClient {
     useDefaultModels() {
         console.warn('Using default model configuration');
         // Keep minimal defaults as fallback
-        this.modelPricing = {
-            'claude-haiku-4-5': { input: 1.00, output: 5.00, contextWindow: 200000 },
-            'gpt-3.5-turbo': { input: 0.50, output: 1.50, contextWindow: 16385 },
-            'gemini-2.5-flash': { input: 0.075, output: 0.30, contextWindow: 1048576 }
+        this.modelContextWindows = {
+            'claude-haiku-4-5': 200000,
+            'gpt-3.5-turbo': 16385,
+            'gemini-2.5-flash': 1048576
         };
         this.modelNames = {
             'claude-haiku-4-5': 'Haiku (Latest)',
@@ -609,6 +625,65 @@ class ChatClient {
         if (modal) {
             modal.style.display = 'none';
         }
+    }
+
+    updateLimitMessagesVisibility() {
+        if (!this.limitMessagesContainer) {
+            return;
+        }
+
+        this.limitMessagesContainer.style.display = 'flex';
+    }
+
+    getLimitedHistoryFallback(limit) {
+        if (!Array.isArray(this.messages)) {
+            return [];
+        }
+
+        if (limit <= 0) {
+            return [...this.messages];
+        }
+
+        const baseSlice = this.sliceMessagesByUserLimit(limit);
+        const lastToolIdx = this.findLastToolInteractionIndex(this.messages);
+
+        if (lastToolIdx === -1) {
+            return baseSlice;
+        }
+
+        const baseStartIdx = this.messages.length - baseSlice.length;
+        if (lastToolIdx < baseStartIdx) {
+            return this.messages.slice(lastToolIdx);
+        }
+
+        return baseSlice;
+    }
+
+    sliceMessagesByUserLimit(limit) {
+        let userMessagesSeen = 0;
+        for (let i = this.messages.length - 1; i >= 0; i--) {
+            const entry = this.messages[i];
+            if (entry && entry.role === 'user' && typeof entry.content === 'string') {
+                userMessagesSeen++;
+                if (userMessagesSeen === limit) {
+                    return this.messages.slice(i);
+                }
+            }
+        }
+        return [...this.messages];
+    }
+
+    findLastToolInteractionIndex(history) {
+        for (let i = history.length - 1; i >= 0; i--) {
+            const entry = history[i];
+            if (!entry) continue;
+            if (entry.role === 'assistant' && Array.isArray(entry.content)) {
+                if (entry.content.some(part => part.type === 'tool_use')) {
+                    return i;
+                }
+            }
+        }
+        return -1;
     }
 
     saveSystemPrompt() {
@@ -1677,7 +1752,6 @@ class ChatClient {
 
                 this.messages = restoredMessages;
                 this.totalTokens = chatData.totalTokens || 0;
-                this.totalCost = chatData.totalCost || 0;
                 this.currentContextTokens = chatData.currentContextTokens || 0;
 
                 // Restore messages to AI Manager if it exists
@@ -1715,7 +1789,6 @@ class ChatClient {
         const chatData = {
             messages: messages,
             totalTokens: this.totalTokens,
-            totalCost: this.totalCost,
             currentContextTokens: this.currentContextTokens,
             timestamp: new Date().toISOString(),
             provider: this.currentProvider,
@@ -1736,7 +1809,6 @@ class ChatClient {
         const chatData = {
             messages: messages,
             totalTokens: this.totalTokens,
-            totalCost: this.totalCost,
             currentContextTokens: this.currentContextTokens,
             timestamp: new Date().toISOString(),
             provider: this.currentProvider,
@@ -1767,7 +1839,6 @@ class ChatClient {
 
                 this.messages = restoredMessages;
                 this.totalTokens = chatData.totalTokens || 0;
-                this.totalCost = chatData.totalCost || 0;
                 this.currentContextTokens = chatData.currentContextTokens || 0;
 
                 // Restore messages to AI Manager if it exists
@@ -1806,7 +1877,6 @@ class ChatClient {
     async clearChat() {
         this.messages = [];
         this.totalTokens = 0;
-        this.totalCost = 0;
         this.currentContextTokens = 0;
         this.chatWindow.innerHTML = '';
 
@@ -1827,7 +1897,6 @@ class ChatClient {
             const emptyChat = {
                 messages: [],
                 totalTokens: 0,
-                totalCost: 0,
                 currentContextTokens: 0,
                 timestamp: new Date().toISOString(),
                 provider: this.providerSelect.value,
@@ -1936,6 +2005,20 @@ class ChatClient {
             this.minimizeTokensToggle.addEventListener('change', (e) => {
                 this.minimizeTokens = e.target.checked;
                 localStorage.setItem('minimize_tokens', this.minimizeTokens ? 'true' : 'false');
+                this.updateLimitMessagesVisibility();
+                this.renderChatHistory();
+            });
+        }
+
+        if (this.limitMessagesInput) {
+            this.limitMessagesInput.addEventListener('change', (e) => {
+                let value = parseInt(e.target.value, 10);
+                if (Number.isNaN(value) || value < 0) {
+                    value = 0;
+                }
+                this.limitMessages = value;
+                e.target.value = String(value);
+                localStorage.setItem('limit_messages', String(value));
                 this.renderChatHistory();
             });
         }
@@ -1989,97 +2072,91 @@ class ChatClient {
 
     updateTokenDisplay() {
         const tokenDisplay = document.getElementById('tokenDisplay');
-        const costDisplay = document.getElementById('costDisplay');
-
-        // Always update the display, even when tokens are 0
-        if (this.totalTokens >= 0 || this.currentContextTokens >= 0) {
-            // Format total tokens used
-            let totalText = '';
-            if (this.totalTokens >= 1000000) {
-                totalText = `${(this.totalTokens / 1000000).toFixed(2)}M`;
-            } else if (this.totalTokens >= 1000) {
-                totalText = `${(this.totalTokens / 1000).toFixed(1)}K`;
-            } else {
-                totalText = this.totalTokens.toString();
-            }
-
-            // Only show context remaining if we've actually sent messages
-            if (this.currentContextTokens > 0) {
-                // Get current model's context window
-                const model = this.modelSelect.value;
-                const pricing = this.modelPricing[model];
-                const contextWindow = pricing ? pricing.contextWindow : 200000;
-
-                // Calculate remaining context
-                const remainingContext = contextWindow - this.currentContextTokens;
-                const contextPercentUsed = (this.currentContextTokens / contextWindow) * 100;
-
-                // Format context display with color coding
-                let contextColor = '#b8960f'; // Duller yellow default
-                if (contextPercentUsed > 90) {
-                    contextColor = '#cc4444'; // Red when > 90% used
-                } else if (contextPercentUsed > 75) {
-                    contextColor = '#cc6600'; // Orange when > 75% used
-                }
-
-                // Format remaining tokens
-                let remainingText = '';
-                if (remainingContext >= 1000000) {
-                    remainingText = `${(remainingContext / 1000000).toFixed(2)}M`;
-                } else if (remainingContext >= 1000) {
-                    remainingText = `${(remainingContext / 1000).toFixed(1)}K`;
-                } else {
-                    remainingText = remainingContext.toString();
-                }
-
-                // Display format: "1.5K total | 185K left"
-                tokenDisplay.innerHTML = `<span style="color: ${contextColor}">${totalText} used | ${remainingText} left</span>`;
-            } else {
-                // Just show total used when no context established yet
-                tokenDisplay.innerHTML = `<span style="color: #b8960f">${totalText} used</span>`;
-            }
-
-            // Format cost - always display, even if 0
-            costDisplay.textContent = `$${this.totalCost.toFixed(4)}`;
+        if (!tokenDisplay) {
+            return;
         }
+
+        const formatCount = (value) => {
+            if (value >= 1000000) return `${(value / 1000000).toFixed(2)}M`;
+            if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
+            return value.toString();
+        };
+
+        const model = this.modelSelect ? this.modelSelect.value : null;
+        const contextWindow = this.modelContextWindows[model] || 200000;
+        const usedTokens = Math.max(this.currentContextTokens, 0);
+
+        if (usedTokens === 0) {
+            tokenDisplay.textContent = '';
+            return;
+        }
+
+        const contextPercentUsed = contextWindow > 0 ? (usedTokens / contextWindow) * 100 : 0;
+        let contextColor = '#b8960f';
+        if (contextPercentUsed > 90) {
+            contextColor = '#cc4444';
+        } else if (contextPercentUsed > 75) {
+            contextColor = '#cc6600';
+        }
+
+        tokenDisplay.innerHTML = `<span style="color: ${contextColor}">Last call: ${formatCount(usedTokens)} used | ${formatCount(contextWindow)} max</span>`;
     }
 
     addMessage(content, role, metadata = null) {
-        // Create container
+        const isToolSummary = !!(metadata && metadata.toolSummary);
+
         const containerDiv = document.createElement('div');
         containerDiv.className = `message-container ${role}`;
+        if (isToolSummary) {
+            containerDiv.classList.add('tool-summary');
+        }
 
-        // Create wrapper for message and header
         const messageWrapper = document.createElement('div');
         messageWrapper.style.display = 'flex';
         messageWrapper.style.flexDirection = 'column';
         messageWrapper.style.flex = '1';
 
-        // Add model info header for assistant messages
-        if (role === 'assistant' && metadata) {
+        const addHeader = (text, align = 'flex-start') => {
+            if (!text) return;
             const headerDiv = document.createElement('div');
             headerDiv.className = 'message-header';
             headerDiv.style.fontSize = '11px';
             headerDiv.style.color = '#888';
             headerDiv.style.marginBottom = '4px';
             headerDiv.style.opacity = '0.8';
-
-            // Format provider/model info
-            const provider = metadata.provider || this.currentProvider;
-            const model = metadata.model || this.modelSelect.value;
-            const displayName = this.getModelDisplayName(provider, model);
-            headerDiv.textContent = displayName;
-
+            headerDiv.style.alignSelf = align;
+            headerDiv.style.textAlign = align === 'flex-end' ? 'right' : 'left';
+            headerDiv.textContent = text;
             messageWrapper.appendChild(headerDiv);
+        };
+
+        if (role === 'assistant') {
+            if (isToolSummary) {
+                addHeader('Tool');
+            } else if (metadata && (metadata.provider || metadata.model)) {
+                const provider = metadata.provider || this.currentProvider;
+                const model = metadata.model || this.modelSelect.value;
+                addHeader(this.getModelDisplayName(provider, model));
+            } else {
+                addHeader('Assistant');
+            }
+        } else if (role === 'user') {
+            addHeader('User', 'flex-end');
         }
 
-        // Create message bubble
+        if (metadata && metadata.provider === 'tool-use') {
+            addHeader('Tool');
+        }
+
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${role}`;
+        if (isToolSummary) {
+            messageDiv.classList.add('tool-summary');
+        }
 
-        // Render markdown for assistant and error messages, plain text for user messages
-        if (role === 'assistant' || role === 'error') {
-            // Configure marked options for better code rendering
+        const shouldRenderMarkdown = !isToolSummary && (role === 'assistant' || role === 'error');
+
+        if (shouldRenderMarkdown) {
             if (typeof marked !== 'undefined') {
                 marked.setOptions({
                     highlight: function(code, lang) {
@@ -2090,40 +2167,32 @@ class ChatClient {
                         }
                         return code;
                     },
-                    breaks: true, // Support line breaks
-                    gfm: true, // GitHub Flavored Markdown
+                    breaks: true,
+                    gfm: true,
                 });
 
-                // Render markdown
                 const htmlContent = marked.parse(content);
                 messageDiv.innerHTML = htmlContent;
 
-                // Apply syntax highlighting to any code blocks that weren't highlighted
                 if (typeof hljs !== 'undefined') {
                     messageDiv.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
                         hljs.highlightElement(block);
                     });
                 }
             } else {
-                // Fallback to plain text if marked is not loaded
                 messageDiv.textContent = content;
             }
         } else {
-            // User messages and tool messages remain plain text
             messageDiv.textContent = content;
         }
 
         messageWrapper.appendChild(messageDiv);
 
-        // Add copy button (outside the message)
         const copyButton = document.createElement('button');
         copyButton.className = 'copy-button';
         copyButton.textContent = 'Copy';
         copyButton.onclick = () => this.copyToClipboard(content, copyButton);
 
-        // Add elements to container
-        // For user messages: copy button on left, then message
-        // For other messages: message, then copy button on right
         if (role === 'user') {
             containerDiv.appendChild(copyButton);
             containerDiv.appendChild(messageWrapper);
@@ -2176,17 +2245,32 @@ class ChatClient {
         const containerDiv = document.createElement('div');
         containerDiv.className = 'message-container tool-use';
 
+        const messageWrapper = document.createElement('div');
+        messageWrapper.style.display = 'flex';
+        messageWrapper.style.flexDirection = 'column';
+        messageWrapper.style.flex = '1';
+
+        const headerDiv = document.createElement('div');
+        headerDiv.className = 'message-header';
+        headerDiv.style.fontSize = '11px';
+        headerDiv.style.color = '#888';
+        headerDiv.style.marginBottom = '4px';
+        headerDiv.style.opacity = '0.8';
+        headerDiv.textContent = 'Tool';
+        messageWrapper.appendChild(headerDiv);
+
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message tool-use';
         const content = `Using tool: ${toolName}\nInput: ${JSON.stringify(input, null, 2)}`;
         messageDiv.textContent = content;
+        messageWrapper.appendChild(messageDiv);
 
         const copyButton = document.createElement('button');
         copyButton.className = 'copy-button';
         copyButton.textContent = 'Copy';
         copyButton.onclick = () => this.copyToClipboard(content, copyButton);
 
-        containerDiv.appendChild(messageDiv);
+        containerDiv.appendChild(messageWrapper);
         containerDiv.appendChild(copyButton);
 
         this.chatWindow.appendChild(containerDiv);
@@ -2197,18 +2281,33 @@ class ChatClient {
         const containerDiv = document.createElement('div');
         containerDiv.className = 'message-container tool-result';
 
+        const messageWrapper = document.createElement('div');
+        messageWrapper.style.display = 'flex';
+        messageWrapper.style.flexDirection = 'column';
+        messageWrapper.style.flex = '1';
+
+        const headerDiv = document.createElement('div');
+        headerDiv.className = 'message-header';
+        headerDiv.style.fontSize = '11px';
+        headerDiv.style.color = '#888';
+        headerDiv.style.marginBottom = '4px';
+        headerDiv.style.opacity = '0.8';
+        headerDiv.textContent = 'Tool';
+        messageWrapper.appendChild(headerDiv);
+
         const messageDiv = document.createElement('div');
         messageDiv.className = `message tool-result${isError ? ' tool-error' : ''}`;
         const heading = isError ? 'Tool error' : 'Tool result';
         const content = `${heading}:\n${result}`;
         messageDiv.textContent = content;
+        messageWrapper.appendChild(messageDiv);
 
         const copyButton = document.createElement('button');
         copyButton.className = 'copy-button';
         copyButton.textContent = 'Copy';
         copyButton.onclick = () => this.copyToClipboard(result, copyButton);
 
-        containerDiv.appendChild(messageDiv);
+        containerDiv.appendChild(messageWrapper);
         containerDiv.appendChild(copyButton);
 
         this.chatWindow.appendChild(containerDiv);
@@ -2220,9 +2319,10 @@ class ChatClient {
             return;
         }
 
+        const limitMessages = this.limitMessages > 0 ? this.limitMessages : 0;
         const history = this.aiManager
-            ? this.aiManager.getHistoryView(this.minimizeTokens)
-            : (Array.isArray(this.messages) ? this.messages : []);
+            ? this.aiManager.getHistoryView(this.minimizeTokens, limitMessages)
+            : this.getLimitedHistoryFallback(limitMessages);
 
         this.chatWindow.innerHTML = '';
         this.currentContinueButton = null;
@@ -2360,7 +2460,8 @@ class ChatClient {
                 maxTokens: 4096,
                 temperature: 0.7,
                 maxIterations: this.maxIterations,
-                minimizeTokens: this.minimizeTokens
+                minimizeTokens: this.minimizeTokens,
+                limitMessages: this.limitMessages > 0 ? this.limitMessages : 0
             });
 
             if (this.minimizeTokens) {
@@ -2403,15 +2504,6 @@ class ChatClient {
 
             // Update current context usage
             this.currentContextTokens = inputTokens + outputTokens;
-
-            // Calculate cost for this request
-            const model = this.modelSelect.value;
-            const pricing = this.modelPricing[model];
-            if (pricing) {
-                const inputCost = (inputTokens / 1000000) * pricing.input;
-                const outputCost = (outputTokens / 1000000) * pricing.output;
-                this.totalCost += inputCost + outputCost;
-            }
 
             this.updateTokenDisplay();
         }
@@ -2516,7 +2608,8 @@ class ChatClient {
                 maxTokens: 4096,
                 temperature: 0.7,
                 maxIterations: 20,
-                minimizeTokens: this.minimizeTokens
+                minimizeTokens: this.minimizeTokens,
+                limitMessages: this.limitMessages > 0 ? this.limitMessages : 0
             });
 
             if (this.minimizeTokens) {
@@ -2637,15 +2730,6 @@ class ChatClient {
 
             // Update current context usage (this represents the current conversation size)
             this.currentContextTokens = inputTokens + outputTokens;
-
-            // Calculate cost for this request
-            const model = this.modelSelect.value;
-            const pricing = this.modelPricing[model];
-            if (pricing) {
-                const inputCost = (inputTokens / 1000000) * pricing.input;
-                const outputCost = (outputTokens / 1000000) * pricing.output;
-                this.totalCost += inputCost + outputCost;
-            }
 
             this.updateTokenDisplay();
         }

@@ -251,7 +251,6 @@ class FileBrowserUI {
                                     // Restore chat data
                                     window.chat.messages = chatData.messages || [];
                                     window.chat.totalTokens = chatData.totalTokens || 0;
-                                    window.chat.totalCost = chatData.totalCost || 0;
                                     window.chat.currentContextTokens = chatData.currentContextTokens || 0;
 
                                     // Restore messages to AI Manager if it exists
@@ -282,7 +281,8 @@ class FileBrowserUI {
                                             if (Array.isArray(msg.content)) {
                                                 for (let content of msg.content) {
                                                     if (content.type === 'text') {
-                                                        window.chat.addMessage(content.text, 'assistant', msg.metadata);
+                                                        const meta = content.metadata || msg.metadata || null;
+                                                        window.chat.addMessage(content.text, 'assistant', meta);
                                                     } else if (content.type === 'tool_use') {
                                                         window.chat.addToolUse(content.name, content.input);
                                                     }
@@ -384,7 +384,6 @@ class FileBrowserUI {
                     const chatData = {
                         messages: messages,
                         totalTokens: window.chat.totalTokens,
-                        totalCost: window.chat.totalCost,
                         currentContextTokens: window.chat.currentContextTokens,
                         timestamp: new Date().toISOString(),
                         provider: window.chat.currentProvider,

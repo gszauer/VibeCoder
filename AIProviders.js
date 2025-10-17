@@ -599,66 +599,125 @@ class AIManager {
     }
 
     buildToolBatchSummary(toolMetas) {
-        if (!Array.isArray(toolMetas) || toolMetas.length === 0) {
-            return [];
-        }
+        const summary = {
+            successCount: 0,
+            failureCount: 0,
+            successNames: [],
+            failureNames: []
+        };
 
-        let successCount = 0;
-        let failureCount = 0;
-        const successNames = [];
-        const failureNames = [];
+        if (!Array.isArray(toolMetas)) {
+            return summary;
+        }
 
         for (const meta of toolMetas) {
-            const isError = !!(meta && meta.isError);
+            if (!meta) {
+                continue;
+            }
+            const isError = !!meta.isError;
             if (isError) {
-                failureCount++;
-                if (meta && meta.name) {
-                    failureNames.push(meta.name);
+                summary.failureCount += 1;
+                if (meta.name) {
+                    summary.failureNames.push(meta.name);
                 }
             } else {
-                successCount++;
-                if (meta && meta.name) {
-                    successNames.push(meta.name);
+                summary.successCount += 1;
+                if (meta.name) {
+                    summary.successNames.push(meta.name);
                 }
             }
         }
 
-        const summaries = [];
-
-        if (successCount > 0) {
-            let text;
-            if (successCount === 1) {
-                const name = successNames[0];
-                text = name ? `Successfully called tool ${name}` : 'Successfully called 1 tool';
-            } else {
-                text = `Successfully called ${successCount} tools`;
-            }
-            summaries.push(text);
-        }
-
-        if (failureCount > 0) {
-            let text;
-            if (failureCount === 1) {
-                const name = failureNames[0];
-                text = name ? `Tool ${name} failed` : 'Tool call failed';
-            } else {
-                text = `Failed ${failureCount} tools`;
-                if (failureNames.length > 0) {
-                    text += ` (${failureNames.join(', ')})`;
-                }
-            }
-            summaries.push(text);
-        }
-
-        return summaries;
+        return summary;
     }
 
-    getHistoryView(minimizeTokens = false) {
-        if (!minimizeTokens) {
-            return this.conversationHistory.map((msg) => this.cloneMessage(msg));
+    buildToolSummaryText(summaryInfo) {
+        const texts = [];
+
+        if (summaryInfo.successCount > 0) {
+            if (summaryInfo.successCount === 1) {
+                const name = summaryInfo.successNames.find(Boolean) || 'tool';
+                texts.push(`Successfully called tool ${name}`);
+            } else {
+                texts.push(`Successfully called ${summaryInfo.successCount} tools`);
+            }
         }
 
-        const history = this.conversationHistory;
+        if (summaryInfo.failureCount > 0) {
+            if (summaryInfo.failureCount === 1) {
+                const name = summaryInfo.failureNames.find(Boolean) || 'tool';
+                texts.push(`Tool ${name} failed`);
+            } else {
+                let text = `Failed ${summaryInfo.failureCount} tools`;
+                if (summaryInfo.failureNames.length > 0) {
+                    text += ` (${summaryInfo.failureNames.join(', ')})`;
+                }
+                texts.push(text);
+            }
+        }
+
+        return texts;
+    }
+
+    cloneSummaryInfo(info) {
+        return {
+            successCount: info.successCount || 0,
+            failureCount: info.failureCount || 0,
+            successNames: Array.isArray(info.successNames) ? [...info.successNames] : [],
+            failureNames: Array.isArray(info.failureNames) ? [...info.failureNames] : []
+        };
+    }
+
+    sliceHistoryByUserMessages(limit) {
+        if (limit <= 0) {
+            return this.conversationHistory;
+        }
+
+        let userMessagesSeen = 0;
+        for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
+            const entry = this.conversationHistory[i];
+            if (entry.role === 'user' && typeof entry.content === 'string') {
+                userMessagesSeen++;
+                if (userMessagesSeen === limit) {
+                    return this.conversationHistory.slice(i);
+                }
+            }
+        }
+
+        return this.conversationHistory;
+    }
+
+    findLastToolInteractionIndex(history) {
+        for (let i = history.length - 1; i >= 0; i--) {
+            const entry = history[i];
+            if (!entry) continue;
+            if (entry.role === 'assistant' && Array.isArray(entry.content)) {
+                if (entry.content.some(part => part.type === 'tool_use')) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    getHistoryView(minimizeTokens = false, limitMessages = 0) {
+        let history = limitMessages > 0
+            ? this.sliceHistoryByUserMessages(limitMessages)
+            : this.conversationHistory;
+
+        if (limitMessages > 0) {
+            const lastToolIdx = this.findLastToolInteractionIndex(this.conversationHistory);
+            if (lastToolIdx !== -1) {
+                const baseStartIdx = this.conversationHistory.length - history.length;
+                if (lastToolIdx < baseStartIdx) {
+                    history = this.conversationHistory.slice(lastToolIdx);
+                }
+            }
+        }
+
+        if (!minimizeTokens) {
+            return history.map((msg) => this.cloneMessage(msg));
+        }
         const abridged = [];
 
         const toolInfo = new Map();
@@ -683,43 +742,109 @@ class AIManager {
             }
         }
 
+        const lastToolMessageIndex = minimizeTokens ? this.findLastToolInteractionIndex(history) : -1;
+        let lastToolUseIds = null;
+        if (lastToolMessageIndex !== -1) {
+            const entry = history[lastToolMessageIndex];
+            if (entry && entry.role === 'assistant' && Array.isArray(entry.content)) {
+                lastToolUseIds = new Set(
+                    entry.content
+                        .filter(part => part.type === 'tool_use')
+                        .map(part => part.id)
+                );
+            }
+        }
+
         for (let i = 0; i < history.length; i++) {
             const msg = history[i];
+            if (i === lastToolMessageIndex) {
+                abridged.push(this.cloneMessage(msg));
+                continue;
+            }
             if (msg.role === 'assistant' && Array.isArray(msg.content)) {
                 const transformed = this.cloneMessage(msg);
                 transformed.content = [];
+                transformed.hasNonSummaryText = false;
+                transformed.summaryInfo = null;
 
                 let pendingToolBatch = [];
-                const flushToolBatch = () => {
+
+                const appendBatch = () => {
                     if (pendingToolBatch.length === 0) {
                         return;
                     }
-                    const batchSummaries = this.buildToolBatchSummary(pendingToolBatch);
-                    for (const summary of batchSummaries) {
-                        transformed.content.push({ type: 'text', text: summary });
+                    const batchInfo = this.buildToolBatchSummary(pendingToolBatch);
+                    if (!transformed.summaryInfo) {
+                        transformed.summaryInfo = {
+                            successCount: 0,
+                            failureCount: 0,
+                            successNames: [],
+                            failureNames: []
+                        };
                     }
+                    transformed.summaryInfo.successCount += batchInfo.successCount;
+                    transformed.summaryInfo.failureCount += batchInfo.failureCount;
+                    transformed.summaryInfo.successNames.push(...batchInfo.successNames);
+                    transformed.summaryInfo.failureNames.push(...batchInfo.failureNames);
                     pendingToolBatch = [];
                 };
 
                 for (const part of msg.content) {
                     if (part.type === 'text') {
-                        flushToolBatch();
+                        appendBatch();
                         transformed.content.push({ type: 'text', text: part.text });
+                        transformed.hasNonSummaryText = true;
                     } else if (part.type === 'tool_use') {
                         const meta = toolInfo.get(part.id) || { name: part.name, isError: false };
                         pendingToolBatch.push(meta);
                     }
                 }
 
-                flushToolBatch();
+                appendBatch();
+
+                if (transformed.summaryInfo) {
+                    const summaryTexts = this.buildToolSummaryText(transformed.summaryInfo);
+                    for (const text of summaryTexts) {
+                        transformed.content.push({ type: 'text', text: text, metadata: { toolSummary: true } });
+                    }
+
+                    if (!transformed.hasNonSummaryText && summaryTexts.length > 0) {
+                        const summaryMeta = this.cloneSummaryInfo(transformed.summaryInfo);
+                        transformed.metadata = Object.assign({}, transformed.metadata, {
+                            toolSummary: true,
+                            summaryInfo: summaryMeta
+                        });
+                        const prev = abridged[abridged.length - 1];
+                        if (prev && prev.metadata?.toolSummary && prev.hasNonSummaryText === false) {
+                            const prevInfo = prev.metadata.summaryInfo;
+                            prevInfo.successCount += summaryMeta.successCount;
+                            prevInfo.failureCount += summaryMeta.failureCount;
+                            prevInfo.successNames.push(...summaryMeta.successNames);
+                            prevInfo.failureNames.push(...summaryMeta.failureNames);
+                            const combinedTexts = this.buildToolSummaryText(prevInfo).map(text => ({ type: 'text', text: text, metadata: { toolSummary: true } }));
+                            prev.content = combinedTexts;
+                            prev.metadata.summaryInfo = prevInfo;
+                            prev.hasNonSummaryText = false;
+                            continue;
+                        }
+                    }
+                }
 
                 if (transformed.content.length > 0) {
+                    transformed.hasNonSummaryText = !!transformed.hasNonSummaryText;
+                    if (transformed.metadata?.toolSummary) {
+                        transformed.hasNonSummaryText = false;
+                    }
                     abridged.push(transformed);
                 }
                 continue;
             }
 
             if (msg.role === 'user' && Array.isArray(msg.content) && msg.content[0]?.type === 'tool_result') {
+                const isLastToolResult = lastToolUseIds && msg.content.some(part => part.type === 'tool_result' && lastToolUseIds.has(part.tool_use_id));
+                if (isLastToolResult) {
+                    abridged.push(this.cloneMessage(msg));
+                }
                 continue;
             }
 
@@ -745,7 +870,7 @@ class AIManager {
         }
 
         // Prepare messages with system prompt if set
-        let messages = this.getHistoryView(options.minimizeTokens);
+        let messages = this.getHistoryView(options.minimizeTokens, options.limitMessages || 0);
         if (this.systemPrompt && messages[0]?.role !== 'system') {
             messages.unshift({ role: 'system', content: this.systemPrompt });
         }
