@@ -68,9 +68,22 @@ class ChatClient {
             this.limitMessagesInput.value = String(this.limitMessages);
         }
 
+        const storedTokensPerMinute = parseInt(localStorage.getItem('tokens_per_minute') || '30000', 10);
+        this.tokensPerMinuteLimit = Number.isFinite(storedTokensPerMinute) && storedTokensPerMinute > 0
+            ? storedTokensPerMinute
+            : 30000;
+        this.tokensPerMinuteInput = document.getElementById('tokensPerMinuteInput');
+        if (this.tokensPerMinuteInput) {
+            this.tokensPerMinuteInput.value = String(this.tokensPerMinuteLimit);
+        }
+
         this.loadingIndicator = null;
         this.pendingContinueButton = null;
         this.currentContinueButton = null;
+
+        this.recentTokenUsage = [];
+        this.rateLimitNoticeElement = null;
+        this.rateLimitNoticeInterval = null;
 
         this.messageContextData = new WeakMap();
         this.activeContextMessage = null;
@@ -2054,6 +2067,18 @@ class ChatClient {
                 this.renderChatHistory();
             });
         }
+
+        if (this.tokensPerMinuteInput) {
+            this.tokensPerMinuteInput.addEventListener('change', (e) => {
+                let value = parseInt(e.target.value, 10);
+                if (Number.isNaN(value) || value <= 0) {
+                    value = 30000;
+                }
+                this.tokensPerMinuteLimit = value;
+                this.tokensPerMinuteInput.value = String(value);
+                localStorage.setItem('tokens_per_minute', String(value));
+            });
+        }
     }
 
     setupChatContextMenu() {
@@ -2129,6 +2154,144 @@ class ChatClient {
                 this.showChatBackgroundMenu(event);
             });
         }
+    }
+
+    estimateTokensForText(text) {
+        if (typeof text !== 'string' || text.length === 0) {
+            return 0;
+        }
+        return Math.max(1, Math.ceil(text.length / 4));
+    }
+
+    pruneTokenUsage() {
+        const now = Date.now();
+        const cutoff = now - 60000;
+        this.recentTokenUsage = this.recentTokenUsage.filter(entry => entry.timestamp > cutoff);
+    }
+
+    getTokensUsedLastMinute() {
+        this.pruneTokenUsage();
+        return this.recentTokenUsage.reduce((sum, entry) => sum + entry.tokens, 0);
+    }
+
+    addTokenUsage(tokens, provisional = false) {
+        const entry = {
+            timestamp: Date.now(),
+            tokens,
+            provisional
+        };
+        this.recentTokenUsage.push(entry);
+        return entry;
+    }
+
+    finalizeTokenUsage(entry, actualTokens) {
+        if (!entry) {
+            return;
+        }
+        entry.tokens = actualTokens;
+        entry.provisional = false;
+        entry.timestamp = Date.now();
+        this.pruneTokenUsage();
+    }
+
+    removeTokenUsage(entry) {
+        if (!entry) {
+            return;
+        }
+        const idx = this.recentTokenUsage.indexOf(entry);
+        if (idx !== -1) {
+            this.recentTokenUsage.splice(idx, 1);
+        }
+    }
+
+    getTimeUntilRateLimitClear(tokensNeeded) {
+        if (this.tokensPerMinuteLimit <= 0) {
+            return 0;
+        }
+        this.pruneTokenUsage();
+        const used = this.getTokensUsedLastMinute();
+        if (used + tokensNeeded <= this.tokensPerMinuteLimit) {
+            return 0;
+        }
+        if (this.recentTokenUsage.length === 0) {
+            return 0;
+        }
+        const now = Date.now();
+        const oldest = this.recentTokenUsage[0].timestamp;
+        const wait = (oldest + 60000) - now;
+        return wait > 0 ? wait : 0;
+    }
+
+    showRateLimitNotice(waitMs) {
+        const seconds = Math.ceil(waitMs / 1000);
+        if (!this.rateLimitNoticeElement) {
+            const containerDiv = document.createElement('div');
+            containerDiv.className = 'message-container assistant';
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message assistant';
+            containerDiv.appendChild(messageDiv);
+
+            this.rateLimitNoticeElement = { container: containerDiv, message: messageDiv };
+            this.chatWindow.appendChild(containerDiv);
+        }
+
+        this.rateLimitNoticeElement.message.textContent = `Waiting for rate limit cooldown (${seconds}s)...`;
+        this.chatWindow.scrollTop = this.chatWindow.scrollHeight;
+
+        if (this.rateLimitNoticeInterval) {
+            clearInterval(this.rateLimitNoticeInterval);
+        }
+
+        this.rateLimitNoticeInterval = setInterval(() => {
+            const remaining = this.getTimeUntilRateLimitClear(0);
+            if (remaining <= 0) {
+                this.hideRateLimitNotice();
+            } else if (this.rateLimitNoticeElement) {
+                this.rateLimitNoticeElement.message.textContent = `Waiting for rate limit cooldown (${Math.ceil(remaining / 1000)}s)...`;
+            }
+        }, 1000);
+    }
+
+    hideRateLimitNotice() {
+        if (this.rateLimitNoticeInterval) {
+            clearInterval(this.rateLimitNoticeInterval);
+            this.rateLimitNoticeInterval = null;
+        }
+        if (this.rateLimitNoticeElement) {
+            const { container } = this.rateLimitNoticeElement;
+            if (container && container.parentElement) {
+                container.parentElement.removeChild(container);
+            }
+            this.rateLimitNoticeElement = null;
+        }
+    }
+
+    async waitForRateLimit(tokensNeeded) {
+        if (this.tokensPerMinuteLimit <= 0) {
+            return;
+        }
+
+        this.hideRateLimitNotice();
+
+        const attemptSend = (resolve) => {
+            this.pruneTokenUsage();
+            const used = this.getTokensUsedLastMinute();
+            if (used + tokensNeeded <= this.tokensPerMinuteLimit) {
+                this.hideRateLimitNotice();
+                resolve();
+                return;
+            }
+
+            const waitMs = this.getTimeUntilRateLimitClear(tokensNeeded);
+            this.showRateLimitNotice(waitMs || 1000);
+
+            setTimeout(() => attemptSend(resolve), Math.max(500, waitMs || 1000));
+        };
+
+        return new Promise((resolve) => {
+            attemptSend(resolve);
+        });
     }
 
     registerMessageContext(element, contextData) {
@@ -2913,6 +3076,10 @@ class ChatClient {
 
         this.messageInput.value = '';
         let preAddedMessage = null;
+        const estimatedTokens = this.estimateTokensForText(content);
+        await this.waitForRateLimit(estimatedTokens);
+        const provisionalUsage = this.tokensPerMinuteLimit > 0 ? this.addTokenUsage(estimatedTokens, true) : null;
+
         if (this.aiManager) {
             preAddedMessage = this.aiManager.addMessage('user', content);
             this.syncLocalMessagesFromHistory();
@@ -2961,7 +3128,7 @@ class ChatClient {
             }
             this.loadingIndicator = null;
 
-            await this.processUnifiedResponse(response);
+            await this.processUnifiedResponse(response, provisionalUsage);
 
             if (this.minimizeTokens) {
                 this.renderChatHistory();
@@ -2973,11 +3140,15 @@ class ChatClient {
             this.loadingIndicator = null;
             this.addSystemMessage(`Error: ${error.message}`);
             console.error(`Error calling ${this.currentProvider}:`, error);
+            if (provisionalUsage) {
+                this.removeTokenUsage(provisionalUsage);
+            }
+            this.hideRateLimitNotice();
         }
     }
 
     // New unified response processor
-    async processUnifiedResponse(response) {
+    async processUnifiedResponse(response, provisionalUsage = null) {
         // Update token usage if available
         if (response.usage) {
             // Handle different token field names (Claude uses input_tokens, OpenAI uses prompt_tokens)
@@ -2989,6 +3160,16 @@ class ChatClient {
             this.currentContextTokens = inputTokens + outputTokens;
 
             this.updateTokenDisplay();
+
+            if (inputTokens > 0 && this.tokensPerMinuteLimit > 0) {
+                if (provisionalUsage) {
+                    this.finalizeTokenUsage(provisionalUsage, inputTokens);
+                } else {
+                    this.addTokenUsage(inputTokens, false);
+                }
+            }
+        } else if (provisionalUsage && this.tokensPerMinuteLimit > 0) {
+            this.finalizeTokenUsage(provisionalUsage, provisionalUsage.tokens);
         }
 
         // Display tool calls if any were made
@@ -3111,7 +3292,7 @@ class ChatClient {
                 }
                 this.loadingIndicator = null;
 
-                await this.processUnifiedResponse(response);
+                await this.processUnifiedResponse(response, null);
 
                 if (this.minimizeTokens) {
                     this.renderChatHistory();

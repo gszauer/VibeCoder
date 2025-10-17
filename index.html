@@ -81,31 +81,37 @@
                                 <input type="password" id="apiKey" placeholder="Enter API Key (auto-saves)" style="flex: 1;">
                             </div>
                             <div class="chat-controls">
-                                <div class="chat-buttons" style="width: 100%; display: flex; justify-content: space-between;">
+                                <div class="chat-metrics" style="width: 100%; display: flex; justify-content: flex-start; gap: 15px; flex-wrap: wrap; margin-bottom: 12px;">
+                                    <label class="chat-control-label chat-control-number">
+                                        <span class="chat-control-text">Tool Iterations</span>
+                                        <input type="number" id="maxIterations" min="1" max="50" value="10"
+                                               class="chat-control-input"
+                                               onchange="window.chat && window.chat.updateMaxIterations(this.value)"
+                                               title="Maximum tool call iterations before pausing">
+                                    </label>
+                                    <label class="chat-control-label chat-control-toggle">
+                                        <input type="checkbox" id="minimizeTokensToggle" class="chat-toggle-input" checked>
+                                        <span class="chat-toggle-indicator" aria-hidden="true"></span>
+                                        <span class="chat-control-text">Summarize Tools</span>
+                                    </label>
+                                    <label id="limitMessagesContainer" class="chat-control-label chat-control-number">
+                                        <span class="chat-control-text">Limit Messages</span>
+                                        <input type="number" id="limitMessagesInput" min="0" value="5"
+                                               class="chat-control-input"
+                                               title="Only send the last N user messages">
+                                    </label>
+                                    <label class="chat-control-label chat-control-number">
+                                        <span class="chat-control-text">Tokens / Minute</span>
+                                        <input type="number" id="tokensPerMinuteInput" min="1000" value="30000"
+                                               class="chat-control-input"
+                                               title="Maximum input tokens per minute">
+                                    </label>
+                                </div>
+                                <div class="chat-buttons" style="width: 100%; display: flex; justify-content: space-between; align-items: center;">
                                     <div style="display: flex; gap: 10px;">
                                         <button class="btn" id="systemPromptBtn" onclick="window.chat.openSystemPromptEditor()">System Prompt</button>
                                         <button class="btn" id="toolsPromptBtn" onclick="window.chat.openToolsViewer()">Tools</button>
                                         <button class="btn" id="envPromptBtn" onclick="window.chat.openEnvironmentEditor()">Environment</button>
-                                    </div>
-                                    <div style="display: flex; gap: 10px; align-items: center; flex: 1; justify-content: center;">
-                                        <label class="chat-control-label chat-control-number">
-                                            <span class="chat-control-text">Tool Iterations</span>
-                                            <input type="number" id="maxIterations" min="1" max="50" value="10"
-                                                   class="chat-control-input"
-                                                   onchange="window.chat && window.chat.updateMaxIterations(this.value)"
-                                                   title="Maximum tool call iterations before pausing">
-                                        </label>
-                                        <label class="chat-control-label chat-control-toggle">
-                                            <input type="checkbox" id="minimizeTokensToggle" class="chat-toggle-input" checked>
-                                            <span class="chat-toggle-indicator" aria-hidden="true"></span>
-                                            <span class="chat-control-text">Summarize Tools</span>
-                                        </label>
-                                        <label id="limitMessagesContainer" class="chat-control-label chat-control-number">
-                                            <span class="chat-control-text">Limit Messages</span>
-                                            <input type="number" id="limitMessagesInput" min="0" value="5"
-                                                   class="chat-control-input"
-                                                   title="Only send the last N user messages">
-                                        </label>
                                     </div>
                                     <div style="display: flex; gap: 10px; align-items: center;">
                                         <button class="btn" id="exportChatBtn" onclick="window.chat.exportChatHistory()">Export Chat</button>
