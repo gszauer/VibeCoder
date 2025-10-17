@@ -24,9 +24,15 @@ class ChatClient {
         // Auto-save chat after each response
         this.autoSave = true;
 
-        // System prompt handling
-        this.promptFilePath = '/prompt.txt';
-        this.systemPrompt = this.getDefaultSystemPrompt();
+        // System prompt handling (default + local storage override)
+        this.systemPromptStorageKey = 'system_prompt';
+        const storedPrompt = typeof localStorage !== 'undefined'
+            ? (localStorage.getItem(this.systemPromptStorageKey) || '')
+            : '';
+        this.systemPrompt = storedPrompt.trim() || this.getDefaultSystemPrompt();
+        if (this.systemPrompt) {
+            this.aiManager.setSystemPrompt(this.systemPrompt);
+        }
 
         // Environment info - load from localStorage or use empty default
         this.environmentInfo = localStorage.getItem('environment_info') || '';
@@ -68,9 +74,6 @@ class ChatClient {
         }
         this.initializationPending = false;
 
-        // Load system prompt before providers initialize
-        await this.loadSystemPromptFromFile();
-
         // First load model config
         await this.loadModelConfig();
 
@@ -110,49 +113,6 @@ class ChatClient {
             '',
             'Default to Phaser 3 idioms, provide practical game-development advice, and ensure every modification flows through the abstract editor tools.'
         ].join('\n');
-    }
-
-    async loadSystemPromptFromFile() {
-        if (!this.tools || !this.tools.fileSystem) {
-            this.systemPrompt = this.getDefaultSystemPrompt();
-            return;
-        }
-
-        try {
-            const content = await this.tools.read_file(this.promptFilePath);
-            const trimmed = content.trim();
-            if (trimmed) {
-                this.systemPrompt = trimmed;
-            } else {
-                this.systemPrompt = this.getDefaultSystemPrompt();
-                await this.persistSystemPrompt();
-            }
-        } catch (error) {
-            console.warn(`Failed to load ${this.promptFilePath}:`, error.message);
-            this.systemPrompt = this.getDefaultSystemPrompt();
-            await this.persistSystemPrompt();
-        }
-
-        if (this.aiManager) {
-            this.aiManager.setSystemPrompt(this.systemPrompt);
-        }
-    }
-
-    async persistSystemPrompt() {
-        if (!this.tools || !this.tools.fileSystem) {
-            return;
-        }
-
-        try {
-            const existingFile = await this.tools.fileSystem.getFile(this.promptFilePath);
-            if (existingFile) {
-                await this.tools.write_file(this.promptFilePath, this.systemPrompt);
-            } else {
-                await this.tools.create_file(this.promptFilePath, this.systemPrompt);
-            }
-        } catch (error) {
-            console.error(`Failed to persist ${this.promptFilePath}:`, error.message);
-        }
     }
 
     // Update max iterations setting
@@ -651,24 +611,35 @@ class ChatClient {
         }
     }
 
-    async saveSystemPrompt() {
+    saveSystemPrompt() {
         const editor = document.getElementById('systemPromptEditor');
         if (editor) {
-            // Save in memory only
-            this.systemPrompt = editor.value.trim();
+            const trimmedValue = editor.value.trim();
+            const hasCustomPrompt = !!trimmedValue;
+
+            // Update in-memory prompt
+            this.systemPrompt = hasCustomPrompt
+                ? trimmedValue
+                : this.getDefaultSystemPrompt();
+
+            if (typeof localStorage !== 'undefined') {
+                if (hasCustomPrompt) {
+                    localStorage.setItem(this.systemPromptStorageKey, this.systemPrompt);
+                } else {
+                    localStorage.removeItem(this.systemPromptStorageKey);
+                }
+            }
 
             // Update the AI Manager's system prompt
             if (this.aiManager) {
                 this.aiManager.setSystemPrompt(this.systemPrompt);
             }
 
-            await this.persistSystemPrompt();
-
             // Close the modal
             this.closeSystemPromptEditor();
 
             // Optional: Show a subtle confirmation
-            console.log(`System prompt updated and saved to ${this.promptFilePath}`);
+            console.log('System prompt updated and saved to localStorage');
         }
     }
 
@@ -2222,13 +2193,14 @@ class ChatClient {
         this.chatWindow.scrollTop = this.chatWindow.scrollHeight;
     }
 
-    addToolResult(result) {
+    addToolResult(result, isError = false) {
         const containerDiv = document.createElement('div');
         containerDiv.className = 'message-container tool-result';
 
         const messageDiv = document.createElement('div');
-        messageDiv.className = 'message tool-result';
-        const content = `Tool result:\n${result}`;
+        messageDiv.className = `message tool-result${isError ? ' tool-error' : ''}`;
+        const heading = isError ? 'Tool error' : 'Tool result';
+        const content = `${heading}:\n${result}`;
         messageDiv.textContent = content;
 
         const copyButton = document.createElement('button');
@@ -2255,7 +2227,14 @@ class ChatClient {
         this.chatWindow.innerHTML = '';
         this.currentContinueButton = null;
 
-        for (const msg of history) {
+        const skipIndices = new Set();
+
+        for (let idx = 0; idx < history.length; idx++) {
+            if (skipIndices.has(idx)) {
+                continue;
+            }
+
+            const msg = history[idx];
             if (!msg) {
                 continue;
             }
@@ -2271,7 +2250,7 @@ class ChatClient {
                     if (msg.content[0]?.type === 'tool_result') {
                         for (const result of msg.content) {
                             if (result.type === 'tool_result') {
-                                this.addToolResult(result.content);
+                                this.addToolResult(result.content, !!result.is_error);
                             }
                         }
                     }
@@ -2284,6 +2263,17 @@ class ChatClient {
                     this.addMessage(msg.content, 'assistant', msg.metadata || null);
                 } else if (Array.isArray(msg.content)) {
                     let metadataUsed = false;
+                    let pendingToolResults = new Map();
+
+                    const nextMsg = history[idx + 1];
+                    const nextIsToolResult = nextMsg && nextMsg.role === 'user' && Array.isArray(nextMsg.content) && nextMsg.content.every(part => part.type === 'tool_result');
+                    if (nextIsToolResult) {
+                        for (const result of nextMsg.content) {
+                            pendingToolResults.set(result.tool_use_id, result);
+                        }
+                        skipIndices.add(idx + 1);
+                    }
+
                     for (const part of msg.content) {
                         if (part.type === 'text') {
                             const meta = !metadataUsed ? (msg.metadata || null) : null;
@@ -2291,7 +2281,16 @@ class ChatClient {
                             this.addMessage(part.text, 'assistant', meta);
                         } else if (part.type === 'tool_use') {
                             this.addToolUse(part.name, part.input);
+                            const matchingResult = pendingToolResults.get(part.id);
+                            if (matchingResult) {
+                                this.addToolResult(matchingResult.content, !!matchingResult.is_error);
+                                pendingToolResults.delete(part.id);
+                            }
                         }
+                    }
+
+                    for (const leftoverResult of pendingToolResults.values()) {
+                        this.addToolResult(leftoverResult.content, !!leftoverResult.is_error);
                     }
                 }
             }

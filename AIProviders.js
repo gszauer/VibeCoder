@@ -598,12 +598,59 @@ class AIManager {
         this.conversationHistory.push({ role, content });
     }
 
-    buildToolSummary(toolMeta) {
-        const name = toolMeta && toolMeta.name ? toolMeta.name : 'tool';
-        if (!toolMeta) {
-            return `completed tool call ${name}`;
+    buildToolBatchSummary(toolMetas) {
+        if (!Array.isArray(toolMetas) || toolMetas.length === 0) {
+            return [];
         }
-        return toolMeta.isError ? `failed tool call ${name}` : `successfully called ${name}`;
+
+        let successCount = 0;
+        let failureCount = 0;
+        const successNames = [];
+        const failureNames = [];
+
+        for (const meta of toolMetas) {
+            const isError = !!(meta && meta.isError);
+            if (isError) {
+                failureCount++;
+                if (meta && meta.name) {
+                    failureNames.push(meta.name);
+                }
+            } else {
+                successCount++;
+                if (meta && meta.name) {
+                    successNames.push(meta.name);
+                }
+            }
+        }
+
+        const summaries = [];
+
+        if (successCount > 0) {
+            let text;
+            if (successCount === 1) {
+                const name = successNames[0];
+                text = name ? `Successfully called tool ${name}` : 'Successfully called 1 tool';
+            } else {
+                text = `Successfully called ${successCount} tools`;
+            }
+            summaries.push(text);
+        }
+
+        if (failureCount > 0) {
+            let text;
+            if (failureCount === 1) {
+                const name = failureNames[0];
+                text = name ? `Tool ${name} failed` : 'Tool call failed';
+            } else {
+                text = `Failed ${failureCount} tools`;
+                if (failureNames.length > 0) {
+                    text += ` (${failureNames.join(', ')})`;
+                }
+            }
+            summaries.push(text);
+        }
+
+        return summaries;
     }
 
     getHistoryView(minimizeTokens = false) {
@@ -613,19 +660,6 @@ class AIManager {
 
         const history = this.conversationHistory;
         const abridged = [];
-
-        let lastUserIndex = -1;
-        for (let i = history.length - 1; i >= 0; i--) {
-            const msg = history[i];
-            if (msg.role === 'user' && typeof msg.content === 'string') {
-                lastUserIndex = i;
-                break;
-            }
-        }
-
-        if (lastUserIndex === -1) {
-            return history.map((msg) => this.cloneMessage(msg));
-        }
 
         const toolInfo = new Map();
         for (const msg of history) {
@@ -651,28 +685,33 @@ class AIManager {
 
         for (let i = 0; i < history.length; i++) {
             const msg = history[i];
-            const isBeforeLastUser = i < lastUserIndex;
-
-            if (!isBeforeLastUser) {
-                abridged.push(this.cloneMessage(msg));
-                continue;
-            }
-
             if (msg.role === 'assistant' && Array.isArray(msg.content)) {
                 const transformed = this.cloneMessage(msg);
                 transformed.content = [];
 
+                let pendingToolBatch = [];
+                const flushToolBatch = () => {
+                    if (pendingToolBatch.length === 0) {
+                        return;
+                    }
+                    const batchSummaries = this.buildToolBatchSummary(pendingToolBatch);
+                    for (const summary of batchSummaries) {
+                        transformed.content.push({ type: 'text', text: summary });
+                    }
+                    pendingToolBatch = [];
+                };
+
                 for (const part of msg.content) {
                     if (part.type === 'text') {
+                        flushToolBatch();
                         transformed.content.push({ type: 'text', text: part.text });
                     } else if (part.type === 'tool_use') {
                         const meta = toolInfo.get(part.id) || { name: part.name, isError: false };
-                        transformed.content.push({
-                            type: 'text',
-                            text: this.buildToolSummary(meta)
-                        });
+                        pendingToolBatch.push(meta);
                     }
                 }
+
+                flushToolBatch();
 
                 if (transformed.content.length > 0) {
                     abridged.push(transformed);
