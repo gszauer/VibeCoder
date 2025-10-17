@@ -974,8 +974,10 @@ class AIManager {
         const isContinuation = userMessage === '__continue_tools__';
 
         const skipAddingUserMessage = options.preAddedUserMessage === true;
+        const progressCallback = typeof options.onProgress === 'function' ? options.onProgress : null;
         const providerOptions = { ...options };
         delete providerOptions.preAddedUserMessage;
+        delete providerOptions.onProgress;
 
         // Only add user message if not a continuation
         if (!isContinuation && !skipAddingUserMessage) {
@@ -1091,6 +1093,16 @@ class AIManager {
                 response.assistantMessageId = assistantMessage._id;
                 response.toolResultMessageId = toolResultMessage._id;
 
+                if (progressCallback) {
+                    progressCallback({
+                        type: 'tool_iteration',
+                        assistantMessage,
+                        toolResultMessage,
+                        allToolCalls: toolCallsWithMeta,
+                        allToolResults: toolResultsWithMeta
+                    });
+                }
+
                 // Continue to get the next response
                 finalResponse = response;
             } else {
@@ -1107,6 +1119,12 @@ class AIManager {
                     this.ensureMessageId(assistantMessage);
                     this.conversationHistory.push(assistantMessage);
                     response.assistantMessageId = assistantMessage._id;
+                    if (progressCallback) {
+                        progressCallback({
+                            type: 'final_assistant_message',
+                            assistantMessage
+                        });
+                    }
                 }
             }
         }

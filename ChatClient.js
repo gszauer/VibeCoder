@@ -3104,6 +3104,17 @@ class ChatClient {
                 currentProviderName: this.aiManager.currentProvider
             });
 
+            const handleProgress = () => {
+                if (this.chatWindow && this.loadingIndicator === loadingDiv && this.chatWindow.contains(loadingDiv)) {
+                    this.chatWindow.removeChild(loadingDiv);
+                    this.loadingIndicator = null;
+                }
+                if (this.aiManager) {
+                    this.syncLocalMessagesFromHistory();
+                    this.renderChatHistory();
+                }
+            };
+
             const sendPromise = this.aiManager.sendMessage(content, {
                 model: model,
                 maxTokens: 4096,
@@ -3111,7 +3122,8 @@ class ChatClient {
                 maxIterations: this.maxIterations,
                 minimizeTokens: this.minimizeTokens,
                 limitMessages: this.limitMessages > 0 ? this.limitMessages : 0,
-                preAddedUserMessage: !!preAddedMessage
+                preAddedUserMessage: !!preAddedMessage,
+                onProgress: handleProgress
             });
 
             if (this.minimizeTokens) {
@@ -3130,6 +3142,8 @@ class ChatClient {
 
             await this.processUnifiedResponse(response, provisionalUsage);
 
+            this.hideRateLimitNotice();
+
             if (this.minimizeTokens) {
                 this.renderChatHistory();
             }
@@ -3138,12 +3152,26 @@ class ChatClient {
                 this.chatWindow.removeChild(loadingDiv);
             }
             this.loadingIndicator = null;
-            this.addSystemMessage(`Error: ${error.message}`);
+            const errorText = `Error: ${error.message}`;
+            if (this.aiManager) {
+                this.aiManager.addMessage('assistant', errorText);
+                this.syncLocalMessagesFromHistory();
+                this.renderChatHistory();
+            } else {
+                this.addSystemMessage(errorText);
+            }
             console.error(`Error calling ${this.currentProvider}:`, error);
             if (provisionalUsage) {
                 this.removeTokenUsage(provisionalUsage);
             }
             this.hideRateLimitNotice();
+            if (this.autoSave) {
+                try {
+                    await this.autoSaveChatHistory();
+                } catch (saveError) {
+                    console.error('Failed to save chat history after error:', saveError);
+                }
+            }
         }
     }
 
