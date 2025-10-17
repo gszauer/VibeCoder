@@ -593,6 +593,50 @@ class AIManager {
         return JSON.parse(JSON.stringify(message));
     }
 
+    findLatestUserTextMessageIndex(messages) {
+        if (!Array.isArray(messages)) {
+            return -1;
+        }
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const entry = messages[i];
+            if (entry && entry.role === 'user' && typeof entry.content === 'string') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    async buildAugmentedPrompt(originalMessage) {
+        if (typeof originalMessage !== 'string') {
+            return originalMessage;
+        }
+
+        const summaryTool = this.tools.find(tool => tool.name === 'code_summary');
+        let summaryText = '';
+
+        if (summaryTool && typeof summaryTool.handler === 'function') {
+            try {
+                const summary = await summaryTool.handler();
+                if (typeof summary === 'string') {
+                    summaryText = summary;
+                } else if (summary !== undefined && summary !== null) {
+                    summaryText = JSON.stringify(summary, null, 2);
+                } else {
+                    summaryText = '[code_summary returned no data]';
+                }
+            } catch (error) {
+                console.error('Error generating code summary for prompt augmentation:', error);
+                summaryText = `[Error generating summary: ${error.message}]`;
+            }
+        } else {
+            summaryText = '[code_summary tool unavailable]';
+        }
+
+        const cleanedSummary = typeof summaryText === 'string' ? summaryText.trimEnd() : '';
+        const finalSummary = cleanedSummary || '[No summary generated]';
+        return `Code summary:\n${finalSummary}\n\n${originalMessage}`;
+    }
+
     // Add a message to history
     addMessage(role, content) {
         this.conversationHistory.push({ role, content });
@@ -875,6 +919,20 @@ class AIManager {
             messages.unshift({ role: 'system', content: this.systemPrompt });
         }
 
+        if (!isContinuation) {
+            const targetIndex = this.findLatestUserTextMessageIndex(messages);
+            if (targetIndex !== -1) {
+                const originalContent = messages[targetIndex].content;
+                const augmentedPrompt = await this.buildAugmentedPrompt(originalContent);
+                if (typeof augmentedPrompt === 'string' && augmentedPrompt !== originalContent) {
+                    messages[targetIndex].content = augmentedPrompt;
+                    if (AIManager.logAugmentedPrompts) {
+                        console.log('[AIManager] Augmented prompt sent to provider:\n' + augmentedPrompt);
+                    }
+                }
+            }
+        }
+
         // Allow customizable max iterations, with higher limit for continuations
         const MAX_ITERATIONS = options.maxIterations || (isContinuation ? 20 : 10);
 
@@ -1002,6 +1060,8 @@ class AIManager {
         return total;
     }
 }
+
+AIManager.logAugmentedPrompts = true;
 
 // Ollama Provider (Dynamic local models)
 class OllamaProvider extends AIProvider {
