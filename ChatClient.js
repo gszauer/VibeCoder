@@ -3129,6 +3129,10 @@ class ChatClient {
         this.messageInput.value = '';
         this.pendingProviderUsageEntries = [];
         let preAddedMessage = null;
+        const sendButton = document.getElementById('sendBtn');
+        if (sendButton) {
+            sendButton.disabled = true;
+        }
 
         if (this.aiManager) {
             preAddedMessage = this.aiManager.addMessage('user', content);
@@ -3220,10 +3224,6 @@ class ChatClient {
 
             this.loadingIndicator = loadingDiv;
             this.chatWindow.appendChild(loadingDiv);
-            const sendButton = document.getElementById('sendBtn');
-            if (sendButton) {
-                sendButton.disabled = true;
-            }
 
             const response = await sendPromise;
 
