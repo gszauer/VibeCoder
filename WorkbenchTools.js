@@ -403,6 +403,9 @@ class WorkbenchTools {
             !file.path.includes('node_modules')
         );
 
+        const minifiedFiles = jsFiles.filter(file => file.path.toLowerCase().endsWith('.min.js'));
+        const analysableFiles = jsFiles.filter(file => !file.path.toLowerCase().endsWith('.min.js'));
+
         if (jsFiles.length === 0) {
             return 'No JavaScript files found in the workspace.';
         }
@@ -410,11 +413,23 @@ class WorkbenchTools {
         let output = 'JavaScript Analysis\n';
         output += '==================\n\n';
 
+        if (minifiedFiles.length > 0) {
+            output += 'Libraries (minified .js files):\n';
+            output += '------------------------------\n';
+            minifiedFiles
+                .map(file => file.path)
+                .sort()
+                .forEach(path => {
+                    output += `  ${path}\n`;
+                });
+            output += '\n';
+        }
+
         const allClasses = [];
         const allTopLevelDeclarations = new Set();
 
         // Process each JavaScript file
-        for (const file of jsFiles) {
+        for (const file of analysableFiles) {
             try {
                 const content = await this.read_file(file.path);
                 const analysis = this.analyzeJavaScript(content, file.path);
