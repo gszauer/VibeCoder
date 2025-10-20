@@ -77,6 +77,12 @@ class ChatClient {
             this.tokensPerMinuteInput.value = String(this.tokensPerMinuteLimit);
         }
 
+        this.debugPromptEnabled = localStorage.getItem('debug_prompt_enabled') === 'true';
+        this.debugPromptToggle = document.getElementById('debugPromptToggle');
+        if (this.debugPromptToggle) {
+            this.debugPromptToggle.checked = this.debugPromptEnabled;
+        }
+
         this.loadingIndicator = null;
         this.pendingContinueButton = null;
         this.currentContinueButton = null;
@@ -101,6 +107,12 @@ class ChatClient {
             import: this.chatBackgroundMenu.querySelector('[data-action="import"]'),
             clear: this.chatBackgroundMenu.querySelector('[data-action="clear"]')
         } : null;
+
+        this.debugPromptModal = document.getElementById('debugPromptModal');
+        this.debugPromptEditor = null;
+        this.debugPromptEscHandler = null;
+
+        this.initializeDebugPromptEditor();
 
         this.handleGlobalClickForChatMenu = (event) => {
             if (!this.chatContextMenu && !this.chatBackgroundMenu) return;
@@ -636,6 +648,117 @@ class ChatClient {
             }
         };
         document.addEventListener('keydown', escHandler);
+    }
+
+    initializeDebugPromptEditor() {
+        if (this.debugPromptEditor || typeof ace === 'undefined') {
+            return;
+        }
+
+        const editorElement = document.getElementById('debugPromptEditor');
+        if (!editorElement) {
+            return;
+        }
+
+        this.debugPromptEditor = ace.edit('debugPromptEditor');
+        this.debugPromptEditor.setTheme('ace/theme/tomorrow_night');
+        this.debugPromptEditor.session.setMode('ace/mode/json');
+        this.debugPromptEditor.setReadOnly(true);
+        this.debugPromptEditor.setShowPrintMargin(false);
+        this.debugPromptEditor.setOption('highlightActiveLine', false);
+        this.debugPromptEditor.setOption('highlightGutterLine', false);
+        this.debugPromptEditor.session.setUseWrapMode(true);
+        this.debugPromptEditor.session.setUseWorker(false);
+        this.debugPromptEditor.setFontSize(14);
+        this.debugPromptEditor.setBehavioursEnabled(false);
+
+        const cursorLayer = this.debugPromptEditor.renderer?.$cursorLayer;
+        if (cursorLayer && cursorLayer.element) {
+            cursorLayer.element.style.display = 'none';
+        }
+    }
+
+    showDebugPromptModal(payload) {
+        if (!this.debugPromptModal) {
+            return;
+        }
+
+        this.initializeDebugPromptEditor();
+
+        let debugText = '';
+        try {
+            debugText = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+        } catch (error) {
+            console.warn('Failed to stringify debug payload:', error);
+            debugText = String(payload);
+        }
+
+        if (this.debugPromptEditor) {
+            this.debugPromptEditor.setValue(debugText, -1);
+            this.debugPromptEditor.session.getUndoManager().reset();
+            this.debugPromptEditor.renderer.updateFull();
+            setTimeout(() => {
+                if (this.debugPromptEditor) {
+                    this.debugPromptEditor.resize();
+                }
+            }, 0);
+        } else {
+            const editorElement = document.getElementById('debugPromptEditor');
+            if (editorElement) {
+                editorElement.textContent = debugText;
+            }
+        }
+
+        this.debugPromptModal.style.display = 'flex';
+        this.setupDebugPromptEscHandler();
+    }
+
+    closeDebugPromptModal() {
+        if (this.debugPromptModal) {
+            this.debugPromptModal.style.display = 'none';
+        }
+
+        if (this.debugPromptEscHandler) {
+            document.removeEventListener('keydown', this.debugPromptEscHandler);
+            this.debugPromptEscHandler = null;
+        }
+    }
+
+    setupDebugPromptEscHandler() {
+        if (this.debugPromptEscHandler) {
+            document.removeEventListener('keydown', this.debugPromptEscHandler);
+        }
+
+        this.debugPromptEscHandler = (e) => {
+            if (e.key === 'Escape') {
+                this.closeDebugPromptModal();
+            }
+        };
+
+        document.addEventListener('keydown', this.debugPromptEscHandler);
+    }
+
+    copyDebugPromptContent(event) {
+        const text = this.debugPromptEditor
+            ? this.debugPromptEditor.getValue()
+            : (document.getElementById('debugPromptEditor')?.textContent || '');
+
+        if (!text) {
+            return;
+        }
+
+        navigator.clipboard.writeText(text).then(() => {
+            if (event && event.target) {
+                const button = event.target;
+                const originalText = button.textContent;
+                button.textContent = 'Copied!';
+                setTimeout(() => {
+                    button.textContent = originalText;
+                }, 1500);
+            }
+        }).catch((error) => {
+            console.error('Failed to copy debug prompt:', error);
+        });
     }
 
     // System Prompt Editor Methods
@@ -2080,6 +2203,13 @@ class ChatClient {
                 localStorage.setItem('tokens_per_minute', String(value));
             });
         }
+
+        if (this.debugPromptToggle) {
+            this.debugPromptToggle.addEventListener('change', (e) => {
+                this.debugPromptEnabled = e.target.checked;
+                localStorage.setItem('debug_prompt_enabled', this.debugPromptEnabled ? 'true' : 'false');
+            });
+        }
     }
 
     setupChatContextMenu() {
@@ -3101,7 +3231,40 @@ class ChatClient {
 
     async sendMessage() {
         const content = this.messageInput.value.trim();
-        if (!content) return;
+        if (!content) {
+            if (this.debugPromptEnabled) {
+                this.closeDebugPromptModal();
+
+                const model = this.modelSelect.value;
+                const limitMessages = this.limitMessages > 0 ? this.limitMessages : 0;
+                let messages = this.aiManager.getHistoryView(this.minimizeTokens, limitMessages);
+
+                if (this.aiManager.systemPrompt) {
+                    const hasSystemPrompt = messages.length > 0 && messages[0]?.role === 'system';
+                    if (!hasSystemPrompt) {
+                        messages = [{ role: 'system', content: this.aiManager.systemPrompt }, ...messages];
+                    }
+                }
+
+                const providerOptions = {
+                    model: model,
+                    maxTokens: 4096,
+                    temperature: 0.7,
+                    maxIterations: this.maxIterations,
+                    minimizeTokens: this.minimizeTokens,
+                    limitMessages,
+                    preAddedUserMessage: false
+                };
+
+                try {
+                    const payload = this.aiManager.buildDebugPayload(messages, providerOptions);
+                    this.showDebugPromptModal(payload);
+                } catch (error) {
+                    console.warn('Failed to build debug payload for empty message:', error);
+                }
+            }
+            return;
+        }
 
         // Reset script inclusion choices for new user message (per-invocation memory)
         if (this.tools && this.tools.resetScriptChoices) {
@@ -3206,6 +3369,14 @@ class ChatClient {
                 }
             };
 
+            const debugCallback = this.debugPromptEnabled
+                ? (payload) => this.showDebugPromptModal(payload)
+                : null;
+
+            if (debugCallback) {
+                this.closeDebugPromptModal();
+            }
+
             const sendPromise = this.aiManager.sendMessage(content, {
                 model: model,
                 maxTokens: 4096,
@@ -3215,7 +3386,8 @@ class ChatClient {
                 limitMessages: this.limitMessages > 0 ? this.limitMessages : 0,
                 preAddedUserMessage: !!preAddedMessage,
                 onProgress: handleProgress,
-                prepareRateLimit
+                prepareRateLimit,
+                ...(debugCallback ? { onDebugPayload: debugCallback } : {})
             });
 
             if (this.minimizeTokens) {

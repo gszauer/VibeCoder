@@ -646,6 +646,39 @@ class AIManager {
         }
     }
 
+    buildDebugPayload(messages, providerOptions = {}) {
+        let optionsClone;
+        try {
+            if (typeof structuredClone === 'function') {
+                optionsClone = structuredClone(providerOptions);
+            } else {
+                optionsClone = JSON.parse(JSON.stringify(providerOptions));
+            }
+        } catch (error) {
+            console.warn('Failed to clone provider options for debug payload:', error);
+            optionsClone = { ...providerOptions };
+        }
+
+        const debugMessages = Array.isArray(messages)
+            ? messages.map((msg) => this.cloneMessage(msg))
+            : [];
+
+        const toolSummaries = this.tools.map(tool => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+            category: tool.category
+        }));
+
+        return {
+            provider: this.currentProvider,
+            model: providerOptions.model || null,
+            messages: debugMessages,
+            options: optionsClone,
+            tools: toolSummaries
+        };
+    }
+
     findLatestUserTextMessageIndex(messages) {
         if (!Array.isArray(messages)) {
             return -1;
@@ -993,10 +1026,12 @@ class AIManager {
         const skipAddingUserMessage = options.preAddedUserMessage === true;
         const progressCallback = typeof options.onProgress === 'function' ? options.onProgress : null;
         const prepareRateLimit = typeof options.prepareRateLimit === 'function' ? options.prepareRateLimit : null;
+        const debugCallback = typeof options.onDebugPayload === 'function' ? options.onDebugPayload : null;
         const providerOptions = { ...options };
         delete providerOptions.preAddedUserMessage;
         delete providerOptions.onProgress;
         delete providerOptions.prepareRateLimit;
+        delete providerOptions.onDebugPayload;
 
         // Only add user message if not a continuation
         if (!isContinuation && !skipAddingUserMessage) {
@@ -1020,6 +1055,14 @@ class AIManager {
                         console.log('[AIManager] Augmented prompt sent to provider:\n' + augmentedPrompt);
                     }
                 }
+            }
+        }
+
+        if (debugCallback) {
+            try {
+                debugCallback(this.buildDebugPayload(messages, providerOptions));
+            } catch (error) {
+                console.warn('Failed to generate debug payload:', error);
             }
         }
 
