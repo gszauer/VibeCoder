@@ -69,7 +69,7 @@ class ChatClient {
         }
 
         const storedTokensPerMinute = parseInt(localStorage.getItem('tokens_per_minute') || '30000', 10);
-        this.tokensPerMinuteLimit = Number.isFinite(storedTokensPerMinute) && storedTokensPerMinute > 0
+        this.tokensPerMinuteLimit = Number.isFinite(storedTokensPerMinute) && storedTokensPerMinute >= 0
             ? storedTokensPerMinute
             : 30000;
         this.tokensPerMinuteInput = document.getElementById('tokensPerMinuteInput');
@@ -2072,8 +2072,8 @@ class ChatClient {
         if (this.tokensPerMinuteInput) {
             this.tokensPerMinuteInput.addEventListener('change', (e) => {
                 let value = parseInt(e.target.value, 10);
-                if (Number.isNaN(value) || value <= 0) {
-                    value = 30000;
+                if (Number.isNaN(value) || value < 0) {
+                    value = 0;
                 }
                 this.tokensPerMinuteLimit = value;
                 this.tokensPerMinuteInput.value = String(value);
